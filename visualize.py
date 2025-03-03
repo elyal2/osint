@@ -1,4 +1,4 @@
-from flask import Flask, render_template, jsonify
+from flask import Flask, render_template, jsonify, request
 from graph_database import EntityGraph
 import os
 from dotenv import load_dotenv
@@ -99,6 +99,51 @@ with open('templates/index.html', 'w') as f:
             padding: 5px 10px;
             cursor: pointer;
         }
+        .filter-section {
+            margin-top: 20px;
+            border-top: 1px solid #ccc;
+            padding-top: 10px;
+        }
+        .filter-group {
+            margin: 10px 0;
+        }
+        .checkbox-group {
+            display: flex;
+            flex-direction: column;
+        }
+        .checkbox-group label {
+            margin: 3px 0;
+            display: flex;
+            align-items: center;
+        }
+        .checkbox-group input {
+            margin-right: 5px;
+        }
+        #apply-filters {
+            display: block;
+            margin-top: 10px;
+            padding: 5px 15px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        #apply-filters:hover {
+            background-color: #45a049;
+        }
+        .loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 18px;
+            color: #666;
+            background: rgba(255, 255, 255, 0.8);
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
     </style>
 </head>
 <body>
@@ -107,15 +152,90 @@ with open('templates/index.html', 'w') as f:
         <button id="zoom-in">Zoom In</button>
         <button id="zoom-out">Zoom Out</button>
         <button id="reset">Reset View</button>
+        <div class="filter-section">
+            <h3>Filtros</h3>
+            <div class="filter-group">
+                <label>Tipos de entidades:</label>
+                <div class="checkbox-group">
+                    <label><input type="checkbox" class="entity-type-filter" value="Person" checked> Personas</label>
+                    <label><input type="checkbox" class="entity-type-filter" value="Organization" checked> Organizaciones</label>
+                    <label><input type="checkbox" class="entity-type-filter" value="Location" checked> Lugares</label>
+                    <label><input type="checkbox" class="entity-type-filter" value="Date" checked> Fechas</label>
+                </div>
+            </div>
+            <div class="filter-group">
+                <label>Tipos de relaciones:</label>
+                <div class="checkbox-group">
+                    <label><input type="checkbox" class="relation-type-filter" value="explicit" checked> Explícitas</label>
+                    <label><input type="checkbox" class="relation-type-filter" value="inferred" checked> Inferidas</label>
+                </div>
+            </div>
+            <button id="apply-filters">Aplicar Filtros</button>
+        </div>
     </div>
     <script>
-        // Fetch graph data from API
-        fetch('/api/graph')
-            .then(response => response.json())
-            .then(data => renderGraph(data))
-            .catch(error => console.error('Error loading graph data:', error));
+        // Añade un evento para el botón de aplicar filtros
+        document.getElementById('apply-filters').addEventListener('click', function() {
+            loadGraphWithFilters();
+        });
+        
+        // Función para cargar el grafo con filtros aplicados
+        function loadGraphWithFilters() {
+            // Recoger los filtros seleccionados
+            const entityFilters = Array.from(document.querySelectorAll('.entity-type-filter:checked'))
+                .map(checkbox => checkbox.value);
+                
+            const relationFilters = Array.from(document.querySelectorAll('.relation-type-filter:checked'))
+                .map(checkbox => checkbox.value);
+            
+            // Construir la URL con parámetros de filtro
+            let url = '/api/graph?';
+            
+            entityFilters.forEach(filter => {
+                url += `entity_type=${filter}&`;
+            });
+            
+            relationFilters.forEach(filter => {
+                url += `relation_type=${filter}&`;
+            });
+            
+            // Eliminar el contenedor del grafo actual
+            d3.select("#graph-container svg").remove();
+            
+            // Mostrar indicador de carga
+            const loading = d3.select("#graph-container")
+                .append("div")
+                .attr("class", "loading")
+                .text("Cargando grafo...");
+            
+            // Cargar los datos filtrados
+            fetch(url)
+                .then(response => response.json())
+                .then(data => {
+                    loading.remove();
+                    renderGraph(data);
+                })
+                .catch(error => {
+                    loading.text("Error al cargar el grafo: " + error);
+                    console.error('Error loading graph data:', error);
+                });
+        }
+        
+        // Modificar la carga inicial para usar la misma función
+        document.addEventListener('DOMContentLoaded', function() {
+            loadGraphWithFilters();
+        });
         
         function renderGraph(data) {
+            // Si no hay datos, mostrar mensaje
+            if (!data.nodes || data.nodes.length === 0) {
+                d3.select("#graph-container")
+                    .append("div")
+                    .attr("class", "loading")
+                    .text("No hay datos para mostrar con los filtros seleccionados");
+                return;
+            }
+            
             const container = document.getElementById('graph-container');
             const width = container.clientWidth;
             const height = container.clientHeight;
@@ -390,16 +510,29 @@ def index():
 @app.route('/api/graph')
 def get_graph():
     try:
+        # Obtener parámetros de filtro de la consulta
+        entity_types = request.args.getlist('entity_type')
+        relation_types = request.args.getlist('relation_type')
+        show_inferred = request.args.get('show_inferred', 'true').lower() == 'true'
+        
         graph_db = EntityGraph()
         
-        # Get nodes
+        # Construir la consulta de nodos con filtros dinámicos
+        entity_filter_clause = ""
+        if entity_types:
+            entity_types_quoted = [f"'{t}'" for t in entity_types]
+            entity_filter_clause = f"WHERE e.type IN [{', '.join(entity_types_quoted)}]"
+        
+        nodes_query = f"""
+            MATCH (e:Entity)
+            {entity_filter_clause}
+            RETURN e.uuid AS id, e.name AS name, e.type AS type, e.spanish AS spanish
+            LIMIT 500
+        """
+        
         with graph_db.driver.session() as session:
-            # Get entities (nodes)
-            result_nodes = session.run("""
-                MATCH (e:Entity)
-                RETURN e.uuid AS id, e.name AS name, e.type AS type, e.spanish AS spanish
-                LIMIT 300
-            """)
+            # Obtener nodos filtrados
+            result_nodes = session.run(nodes_query)
             
             nodes = [
                 {
@@ -411,38 +544,55 @@ def get_graph():
                 for record in result_nodes
             ]
             
-            # Get explicit relationships
-            result_explicit_rels = session.run("""
-                MATCH (s:Entity)-[r:RELATES_TO]->(o:Entity)
-                RETURN s.uuid AS source, o.uuid AS target, r.action AS action, 'explicit' AS rel_type
-                LIMIT 300
-            """)
+            # IDs de los nodos filtrados para usarlos en consultas de relaciones
+            node_ids = [node["id"] for node in nodes]
             
-            # Get inferred relationships
-            result_inferred_rels = session.run("""
-                MATCH (s:Entity)-[r:INFERRED]->(o:Entity)
-                RETURN s.uuid AS source, o.uuid AS target, r.action AS action, 'inferred' AS rel_type
-                LIMIT 300
-            """)
+            # Si no hay nodos, devolver grafo vacío
+            if not node_ids:
+                return jsonify({"nodes": [], "relationships": []})
             
-            # Combine relationships
-            relationships = [
-                {
-                    "source": record["source"],
-                    "target": record["target"],
-                    "action": record["action"],
-                    "type": record["rel_type"]
-                }
-                for record in result_explicit_rels
-            ] + [
-                {
-                    "source": record["source"],
-                    "target": record["target"],
-                    "action": record["action"],
-                    "type": record["rel_type"]
-                }
-                for record in result_inferred_rels
-            ]
+            # Construir consultas de relaciones
+            relationships = []
+            
+            # Relaciones explícitas
+            if not relation_types or 'explicit' in relation_types:
+                explicit_query = f"""
+                    MATCH (s:Entity)-[r:RELATES_TO]->(o:Entity)
+                    WHERE s.uuid IN $node_ids AND o.uuid IN $node_ids
+                    RETURN s.uuid AS source, o.uuid AS target, r.action AS action, 'explicit' AS rel_type
+                    LIMIT 1000
+                """
+                explicit_rels = session.run(explicit_query, node_ids=node_ids)
+                
+                relationships.extend([
+                    {
+                        "source": record["source"],
+                        "target": record["target"],
+                        "action": record["action"],
+                        "type": record["rel_type"]
+                    }
+                    for record in explicit_rels
+                ])
+            
+            # Relaciones inferidas
+            if show_inferred and (not relation_types or 'inferred' in relation_types):
+                inferred_query = f"""
+                    MATCH (s:Entity)-[r:INFERRED]->(o:Entity)
+                    WHERE s.uuid IN $node_ids AND o.uuid IN $node_ids
+                    RETURN s.uuid AS source, o.uuid AS target, r.action AS action, 'inferred' AS rel_type
+                    LIMIT 1000
+                """
+                inferred_rels = session.run(inferred_query, node_ids=node_ids)
+                
+                relationships.extend([
+                    {
+                        "source": record["source"],
+                        "target": record["target"],
+                        "action": record["action"],
+                        "type": record["rel_type"]
+                    }
+                    for record in inferred_rels
+                ])
         
         graph_db.close()
         
@@ -452,7 +602,6 @@ def get_graph():
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
