@@ -232,8 +232,56 @@ with open('templates/index.html', 'w') as f:
             
             const path = link.append('path')
                 .attr('class', 'link')
-                .attr('stroke', '#999')
+                .attr('stroke', d => d.type === 'inferred' ? '#d99' : '#999')  // Color diferente para relaciones inferidas
+                .attr('stroke-dasharray', d => d.type === 'inferred' ? '5,5' : null)  // Línea punteada para inferidas
+                .attr('stroke-width', d => d.type === 'inferred' ? '1px' : '1.5px')  // Línea más delgada para inferidas
                 .attr('marker-end', 'url(#arrow)');
+            
+            // Add legend for relationship types
+            const relLegend = svg.append('g')
+                .attr('class', 'legend')
+                .attr('transform', 'translate(' + (width - 150) + ',140)');
+                
+            const relLegendBg = relLegend.append('rect')
+                .attr('width', 120)
+                .attr('height', 70)
+                .attr('fill', 'white')
+                .attr('stroke', '#ccc')
+                .attr('rx', 5);
+                
+            const relLegendTitle = relLegend.append('text')
+                .attr('x', 10)
+                .attr('y', 20)
+                .text('Relationship Types')
+                .style('font-weight', 'bold');
+                
+            // Relationship types legend
+            const relTypes = [
+                {name: 'Explicit', color: '#999', dashed: false},
+                {name: 'Inferred', color: '#d99', dashed: true}
+            ];
+
+            const relLegendItems = relLegend.selectAll('.rel-legend-item')
+                .data(relTypes)
+                .enter()
+                .append('g')
+                .attr('class', 'legend-item')
+                .attr('transform', (d, i) => 'translate(10,' + (i * 20 + 30) + ')');
+                
+            relLegendItems.append('line')
+                .attr('x1', 0)
+                .attr('y1', 0)
+                .attr('x2', 20)
+                .attr('y2', 0)
+                .attr('stroke', d => d.color)
+                .attr('stroke-width', 2)
+                .attr('stroke-dasharray', d => d.dashed ? '3,3' : null);
+                
+            relLegendItems.append('text')
+                .attr('x', 25)
+                .attr('y', 4)
+                .text(d => d.name)
+                .style('font-size', '12px');
                 
             const linkLabels = link.append('text')
                 .attr('class', 'link-label')
@@ -343,11 +391,68 @@ def index():
 def get_graph():
     try:
         graph_db = EntityGraph()
-        graph_data = graph_db.get_entity_graph(limit=200)  # Aumentado el límite para ver más entidades
+        
+        # Get nodes
+        with graph_db.driver.session() as session:
+            # Get entities (nodes)
+            result_nodes = session.run("""
+                MATCH (e:Entity)
+                RETURN e.uuid AS id, e.name AS name, e.type AS type, e.spanish AS spanish
+                LIMIT 300
+            """)
+            
+            nodes = [
+                {
+                    "id": record["id"],
+                    "name": record["name"],
+                    "type": record["type"],
+                    "spanish": record["spanish"]
+                }
+                for record in result_nodes
+            ]
+            
+            # Get explicit relationships
+            result_explicit_rels = session.run("""
+                MATCH (s:Entity)-[r:RELATES_TO]->(o:Entity)
+                RETURN s.uuid AS source, o.uuid AS target, r.action AS action, 'explicit' AS rel_type
+                LIMIT 300
+            """)
+            
+            # Get inferred relationships
+            result_inferred_rels = session.run("""
+                MATCH (s:Entity)-[r:INFERRED]->(o:Entity)
+                RETURN s.uuid AS source, o.uuid AS target, r.action AS action, 'inferred' AS rel_type
+                LIMIT 300
+            """)
+            
+            # Combine relationships
+            relationships = [
+                {
+                    "source": record["source"],
+                    "target": record["target"],
+                    "action": record["action"],
+                    "type": record["rel_type"]
+                }
+                for record in result_explicit_rels
+            ] + [
+                {
+                    "source": record["source"],
+                    "target": record["target"],
+                    "action": record["action"],
+                    "type": record["rel_type"]
+                }
+                for record in result_inferred_rels
+            ]
+        
         graph_db.close()
-        return jsonify(graph_data)
+        
+        return jsonify({
+            "nodes": nodes,
+            "relationships": relationships
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)

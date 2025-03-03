@@ -198,6 +198,9 @@ class EntityGraph:
         object_type = relationship['object']['type']
         object_name = relationship['object']['name']
         
+        # Check if this is an inferred relationship
+        is_inferred = relationship.get('inferred', False)
+        
         # Get entity UUIDs
         subject_key = (subject_type, subject_name)
         object_key = (object_type, object_name)
@@ -225,10 +228,13 @@ class EntityGraph:
         subject_uuid = entity_uuids[subject_key]
         object_uuid = entity_uuids[object_key]
         
-        query = """
-        MATCH (s:Entity {uuid: $subject_uuid})
-        MATCH (o:Entity {uuid: $object_uuid})
-        MERGE (s)-[r:RELATES_TO {action: $action, document_uuid: $document_uuid}]->(o)
+        # Use a different relationship type for inferred relationships
+        relationship_type = "INFERRED" if is_inferred else "RELATES_TO"
+        
+        query = f"""
+        MATCH (s:Entity {{uuid: $subject_uuid}})
+        MATCH (o:Entity {{uuid: $object_uuid}})
+        MERGE (s)-[r:{relationship_type} {{action: $action, document_uuid: $document_uuid}}]->(o)
         RETURN r
         """
         result = tx.run(

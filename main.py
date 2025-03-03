@@ -3,7 +3,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from entity_extractor import EntityRelationshipExtractor
+from entity_extractor_improved import EnhancedEntityRelationshipExtractor as EntityRelationshipExtractor
 from web_scraper import fetch_web_content
 from graph_database import EntityGraph
 import logging
