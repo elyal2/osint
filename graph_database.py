@@ -20,7 +20,7 @@ class EntityGraph:
         # Get Neo4j connection details from environment variables
         neo4j_uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
         neo4j_user = os.getenv("NEO4J_USER", "neo4j")
-        neo4j_password = os.getenv("NEO4J_PASSWORD", "neo4j")
+        neo4j_password = os.getenv("NEO4J_PASSWORD")
         
         try:
             self.driver = GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password))
