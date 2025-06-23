@@ -69,9 +69,15 @@ class EntityGraph:
             entity_uuids = {}
             for entity_type, entities in doc_analysis.get('entities', {}).items():
                 for entity in entities:
-                    entity_uuid = self._create_entity(entity, entity_type)
+                    # Handle both string and dictionary entity formats
+                    if isinstance(entity, str):
+                        entity_obj = {"name": entity}
+                    else:
+                        entity_obj = entity
+                    
+                    entity_uuid = self._create_entity(entity_obj, entity_type)
                     # Store UUID for relationship creation
-                    entity_uuids[(entity_type, entity['name'])] = entity_uuid
+                    entity_uuids[(entity_type, entity_obj['name'])] = entity_uuid
                     
                     # Link entity to document
                     self._link_entity_to_document(entity_uuid, document_uuid)
@@ -133,6 +139,9 @@ class EntityGraph:
         if not isinstance(aliases, list):
             aliases = []
         
+        # Safely get spanish field
+        spanish = entity.get('spanish', '')
+        
         query = """
         MERGE (e:Entity {name: $name, type: $type})
         ON CREATE SET e.uuid = $uuid
@@ -148,7 +157,7 @@ class EntityGraph:
             uuid=entity_uuid,
             name=entity['name'],
             type=entity_type,
-            spanish=entity.get('spanish', ''),
+            spanish=spanish,
             aliases=aliases
         )
         record = result.single()
@@ -240,15 +249,22 @@ class EntityGraph:
         
         Args:
             limit (int): Maximum number of nodes to return
-            
+        
         Returns:
             Dict: Graph data with nodes and links
         """
         with self.driver.session() as session:
+            # Primero verificar si hay entidades
+            count_result = session.run("MATCH (e:Entity) RETURN count(e) as count")
+            entity_count = count_result.single()["count"]
+            
+            if entity_count == 0:
+                return {"nodes": [], "links": []}
+            
             # Get nodes
             nodes_query = f"""
-            MATCH (e:Entity)
-            RETURN e.uuid AS id, e.name AS name, e.type AS type, e.spanish AS spanish
+                MATCH (e:Entity)
+                RETURN e.uuid AS id, e.name AS name, e.type AS type, e.spanish AS spanish
             LIMIT {limit}
             """
             
@@ -293,7 +309,7 @@ class EntityGraph:
                 "nodes": nodes,
                 "links": links
             }
-    
+
     def reset_database(self, confirm=False):
         """
         Reset the database by deleting all nodes and relationships.

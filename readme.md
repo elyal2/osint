@@ -4,7 +4,7 @@ Esta herramienta extrae entidades nombradas (personas, organizaciones, lugares, 
 
 ## Características
 
-- **Extracción de entidades** en cuatro categorías: Persona, Organización, Lugar, Fecha
+- **Extracción de entidades** en siete categorías: Persona, Organización, Lugar, Fecha, Evento, Objeto, Código
 - **Identificación de relaciones** entre entidades en formato Sujeto-Acción-Objeto
 - **Análisis de múltiples formatos**: Texto plano, páginas web y archivos PDF
 - **Soporte para múltiples proveedores de LLM**: Anthropic Claude, Azure OpenAI, AWS Bedrock
@@ -129,6 +129,23 @@ python main.py --file documento.txt --provider aws_bedrock --store-db
 python main.py --file documento.txt --provider anthropic --store-db
 ```
 
+### Modo debug
+
+Para ver los prompts enviados al LLM y sus respuestas:
+
+```bash
+# Analizar con debug habilitado
+python main.py --file documento.txt --debug
+
+# Analizar PDF con debug
+python main.py --pdf documento.pdf --provider azure_openai --debug --store-db
+```
+
+El modo debug mostrará:
+- Los prompts completos enviados al LLM
+- Las respuestas completas recibidas
+- Información detallada del proceso de análisis
+
 ### Opciones adicionales
 
 ```
@@ -142,6 +159,7 @@ python main.py --file documento.txt --provider anthropic --store-db
 --reset-db             Resetear la base de datos antes de procesar
 --reset-db-only        Resetear la base de datos sin procesar ningún documento
 --provider PROVIDER    Proveedor de LLM a usar (anthropic, azure_openai, aws_bedrock)
+--debug                Habilitar modo debug para mostrar prompts y respuestas del LLM
 ```
 
 ### Resetear la base de datos
@@ -234,6 +252,26 @@ RETURN e;
 MATCH (d:Document)-[:MENTIONED_IN]-(e:Entity)
 WHERE d.provider = "anthropic"
 RETURN e;
+
+// Ver eventos y sus participantes
+MATCH (e:Entity {type: "Event"})-[r:RELATES_TO]-(p:Entity)
+WHERE p.type IN ["Person", "Organization"]
+RETURN e, r, p;
+
+// Ver objetos y sus propietarios/usuarios
+MATCH (o:Entity {type: "Object"})-[r:RELATES_TO]-(e:Entity)
+WHERE e.type IN ["Person", "Organization"]
+RETURN o, r, e;
+
+// Ver códigos y operaciones relacionadas
+MATCH (c:Entity {type: "Code"})-[r:RELATES_TO]-(e:Entity)
+RETURN c, r, e;
+
+// Ver entidades por tipo
+MATCH (e:Entity)
+WHERE e.type IN ["Event", "Object", "Code"]
+RETURN e.type, count(e) as count
+ORDER BY count DESC;
 ```
 
 ## Configuración avanzada
@@ -273,7 +311,7 @@ DEFAULT_CONFIGS = {
    AZURE_OPENAI_API_KEY=tu_clave_api
    AZURE_OPENAI_ENDPOINT=https://tu-recurso.openai.azure.com/
    AZURE_DEPLOYMENT_NAME=gpt-4o
-   ```
+```
 
 ## Licencia
 

@@ -1,0 +1,43 @@
+2025-06-23 10:17:18,325 - INFO - Connected to Neo4j
+2025-06-23 10:17:18,326 - INFO - Conectado a la base de datos Neo4j
+2025-06-23 10:17:18,326 - INFO - Usando proveedor de LLM: azure_openai
+2025-06-23 10:17:18,326 - INFO - Inicializando extractor con proveedor: azure_openai
+2025-06-23 10:17:18,792 - INFO - Proveedor azure_openai inicializado correctamente
+2025-06-23 10:17:18,792 - INFO - Cargando archivo PDF: INTELLIGENCE REPORT LEADE[16026007].pdf
+2025-06-23 10:17:18,793 - INFO - Analizando documento PDF...
+2025-06-23 10:17:18,793 - INFO - Analizando PDF con proveedor: azure_openai
+2025-06-23 10:17:20,048 - INFO - PDF convertido a 37 imágenes usando PyMuPDF.
+2025-06-23 10:19:11,867 - INFO - HTTP Request: POST https://gpt4ologicalis.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2024-08-01-preview "HTTP/1.1 200 OK"
+2025-06-23 10:19:11,890 - ERROR - Error durante el análisis del PDF: Azure has not provided the response due to a content filter being triggered
+Traceback (most recent call last):
+  File "/Users/albertorobles/code/osint/entity_extractor_improved.py", line 126, in analyze_pdf
+    analysis_result = self.llm_provider.analyze_pdf(pdf_content)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/albertorobles/code/osint/llm_providers.py", line 78, in analyze_pdf
+    response_content = self.generate_response(
+                       ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/albertorobles/code/osint/llm_providers.py", line 447, in generate_response
+    response = model.invoke(messages)
+               ^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/langchain_core/language_models/chat_models.py", line 284, in invoke
+    self.generate_prompt(
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/langchain_core/language_models/chat_models.py", line 860, in generate_prompt
+    return self.generate(prompt_messages, stop=stop, callbacks=callbacks, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/langchain_core/language_models/chat_models.py", line 690, in generate
+    self._generate_with_cache(
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/langchain_core/language_models/chat_models.py", line 925, in _generate_with_cache
+    result = self._generate(
+             ^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/langchain_openai/chat_models/base.py", line 690, in _generate
+    return self._create_chat_result(response, generation_info)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/langchain_openai/chat_models/azure.py", line 714, in _create_chat_result
+    raise ValueError(
+ValueError: Azure has not provided the response due to a content filter being triggered
+2025-06-23 10:19:11,899 - INFO - Resultados guardados en archivo: output/INTELLIGENCE REPORT LEADE[16026007]_analysis.json
+2025-06-23 10:19:11,899 - INFO - Almacenando resultados en base de datos Neo4j...
+2025-06-23 10:19:11,941 - INFO - Created document node with UUID: 4c6b7e63-ed92-44f9-a0b1-1102dc60b040
+2025-06-23 10:19:11,941 - INFO - Resultados almacenados en base de datos con ID de documento: 4c6b7e63-ed92-44f9-a0b1-1102dc60b040
+2025-06-23 10:19:11,941 - INFO - ¡Análisis completado!
+2025-06-23 10:19:11,941 - INFO - Neo4j connection closed

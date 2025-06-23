@@ -148,6 +148,11 @@ def main():
         default=AppConfig.DEFAULT_LLM_PROVIDER,
         help=f"LLM provider to use (default: {AppConfig.DEFAULT_LLM_PROVIDER})"
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug mode to show LLM prompts and responses"
+    )
     
     # Parse arguments
     args = parser.parse_args()
@@ -200,7 +205,7 @@ def main():
         
         # Crear instancia del extractor con el proveedor especificado
         logger.info(f"Usando proveedor de LLM: {args.provider}")
-        extractor = EntityRelationshipExtractor(provider_name=args.provider)
+        extractor = EntityRelationshipExtractor(provider_name=args.provider, debug_mode=args.debug)
         
         # Procesar archivo, URL o PDF
         source_name = ""
@@ -261,7 +266,7 @@ def main():
             logger.info("¡Análisis completado!")
         else:
             logger.error("No se pudo generar ningún resultado del análisis.")
-            
+        
     except FileNotFoundError as e:
         logger.error(f"Error: {str(e)}")
         sys.exit(1)

@@ -13,23 +13,30 @@ logger = logging.getLogger(__name__)
 class EnhancedEntityRelationshipExtractor:
     """Extracts named entities and relationships from text using multiple LLM providers."""
     
-    def __init__(self, provider_name: str = None):
+    def __init__(self, provider_name: str = None, debug_mode: bool = False):
         """
         Initialize the extractor with a specific LLM provider.
         
         Args:
             provider_name (str, optional): Name of the LLM provider to use.
                 If None, uses the default provider from configuration.
+            debug_mode (bool): Enable debug mode to show LLM prompts and responses
         """
         # Validar configuración antes de inicializar
         if not AppConfig.validate_config():
             raise ValueError("Configuración inválida. Revisa los errores anteriores.")
         
         self.provider_name = provider_name or AppConfig.DEFAULT_LLM_PROVIDER
+        self.debug_mode = debug_mode
         logger.info(f"Inicializando extractor con proveedor: {self.provider_name}")
+        if debug_mode:
+            logger.info("Modo debug habilitado - se mostrarán prompts y respuestas del LLM")
         
         try:
             self.llm_provider = LLMProviderFactory.create_provider(self.provider_name)
+            # Pasar el modo debug al proveedor
+            if hasattr(self.llm_provider, 'set_debug_mode'):
+                self.llm_provider.set_debug_mode(debug_mode)
             logger.info(f"Proveedor {self.provider_name} inicializado correctamente")
         except Exception as e:
             logger.error(f"Error al inicializar proveedor {self.provider_name}: {str(e)}")
@@ -83,7 +90,7 @@ class EnhancedEntityRelationshipExtractor:
             result = {
                 "documentAnalysis": {
                     "metadata": {
-                        "title": doc_title,
+                "title": doc_title,
                         "analysisDate": datetime.now().isoformat(),
                         "language": language,
                         "provider": self.provider_name
@@ -99,7 +106,7 @@ class EnhancedEntityRelationshipExtractor:
         except Exception as e:
             logger.error(f"Error durante el análisis: {str(e)}")
             return self._create_error_response(f"Error en el análisis: {str(e)}")
-
+    
     def analyze_pdf(self, pdf_content: bytes, doc_title: str = "Untitled Document", language: str = "en") -> Dict:
         """
         Analyze a PDF document to extract entities and relationships.
@@ -132,7 +139,7 @@ class EnhancedEntityRelationshipExtractor:
             
             logger.info("Análisis de PDF completado exitosamente")
             return analysis_result
-
+                
         except Exception as e:
             logger.error(f"Error durante el análisis del PDF: {str(e)}", exc_info=True)
             return self._create_error_response(f"Error en el análisis del PDF: {str(e)}")
@@ -186,7 +193,7 @@ class EnhancedEntityRelationshipExtractor:
         object_key = f"{object_.get('type', '')}:{object_.get('name', '')}"
         
         return f"{subject_key}|{action}|{object_key}"
-
+    
     def _create_error_response(self, error_message: str) -> Dict:
         """Create an error response with the specified message."""
         return {
@@ -202,7 +209,10 @@ class EnhancedEntityRelationshipExtractor:
                     "Person": [],
                     "Organization": [],
                     "Location": [],
-                    "Date": []
+                    "Date": [],
+                    "Event": [],
+                    "Object": [],
+                    "Code": []
                 },
                 "relationships": []
             }

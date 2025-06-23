@@ -158,6 +158,9 @@ with open('templates/index.html', 'w') as f:
                     <label><input type="checkbox" class="entity-type-filter" value="Organization" checked> Organizaciones</label>
                     <label><input type="checkbox" class="entity-type-filter" value="Location" checked> Lugares</label>
                     <label><input type="checkbox" class="entity-type-filter" value="Date" checked> Fechas</label>
+                    <label><input type="checkbox" class="entity-type-filter" value="Event" checked> Eventos</label>
+                    <label><input type="checkbox" class="entity-type-filter" value="Object" checked> Objetos</label>
+                    <label><input type="checkbox" class="entity-type-filter" value="Code" checked> Códigos</label>
                 </div>
             </div>
             <div class="filter-group">
@@ -233,31 +236,67 @@ with open('templates/index.html', 'w') as f:
         }
         
         // Función para cargar el grafo
-        function loadGraph(url) {
-            // Mostrar loading
-            const loading = document.createElement('div');
-            loading.className = 'loading';
-            loading.textContent = 'Cargando grafo...';
-            document.getElementById('graph-container').appendChild(loading);
+        function loadGraph(url = '/api/graph') {
+            // Mostrar indicador de carga
+            const loadingDiv = document.createElement('div');
+            loadingDiv.className = 'loading';
+            loadingDiv.textContent = 'Cargando grafo...';
+            document.getElementById('graph-container').appendChild(loadingDiv);
             
-            d3.json(url).then(data => {
-                // Remover loading
+            fetch(url)
+            .then(response => response.json())
+            .then(data => {
+                // Remover indicador de carga
                 document.querySelector('.loading').remove();
                 
-                // Limpiar grafo anterior
-                svg.selectAll('*').remove();
+                // Verificar si hay mensaje de error o información
+                if (data.message) {
+                    // Mostrar mensaje informativo
+                    const messageDiv = document.createElement('div');
+                    messageDiv.className = 'loading';
+                    messageDiv.style.textAlign = 'center';
+                    messageDiv.style.maxWidth = '600px';
+                    messageDiv.innerHTML = `
+                        <h3>${data.message}</h3>
+                        ${data.message.includes('vacía') ? `
+                            <p><strong>Para empezar:</strong></p>
+                            <ul style="text-align: left; display: inline-block;">
+                                <li>Analiza un archivo de texto: <code>python main.py --file documento.txt --store-db</code></li>
+                                <li>Analiza una página web: <code>python main.py --url https://ejemplo.com --store-db</code></li>
+                                <li>Analiza un PDF: <code>python main.py --pdf documento.pdf --store-db</code></li>
+                            </ul>
+                        ` : ''}
+                    `;
+                    document.getElementById('graph-container').appendChild(messageDiv);
+                    return;
+                }
+                
+                if (data.error) {
+                    console.error('Error:', data.error);
+                    const errorDiv = document.createElement('div');
+                    errorDiv.className = 'loading';
+                    errorDiv.style.color = 'red';
+                    errorDiv.innerHTML = `
+                        <h3>Error</h3>
+                        <p>${data.message || data.error}</p>
+                    `;
+                    document.getElementById('graph-container').appendChild(errorDiv);
+                    return;
+                }
+                
+                // Limpiar SVG existente
+                svg.selectAll("*").remove();
                 
                 // Crear enlaces
                 links = svg.append('g')
                     .selectAll('line')
                     .data(data.links)
                     .enter().append('line')
-                    .attr('class', 'link')
-                    .style('stroke', d => d.source === 'explicit' ? '#ff6b6b' : '#4ecdc4');
-                
+                    .attr('class', 'link');
+            
                 // Crear nodos
                 nodes = svg.append('g')
-                    .selectAll('g')
+                .selectAll('g')
                     .data(data.nodes)
                     .enter().append('g')
                     .attr('class', 'node')
@@ -265,7 +304,7 @@ with open('templates/index.html', 'w') as f:
                         .on('start', dragstarted)
                         .on('drag', dragged)
                         .on('end', dragended));
-                
+            
                 // Añadir círculos a los nodos
                 nodes.append('circle')
                     .attr('r', 8)
@@ -275,6 +314,9 @@ with open('templates/index.html', 'w') as f:
                             case 'Organization': return '#4ecdc4';
                             case 'Location': return '#45b7d1';
                             case 'Date': return '#96ceb4';
+                            case 'Event': return '#ff9ff3';
+                            case 'Object': return '#feca57';
+                            case 'Code': return '#54a0ff';
                             default: return '#feca57';
                         }
                     });
@@ -291,7 +333,7 @@ with open('templates/index.html', 'w') as f:
                     .selectAll('text')
                     .data(data.links)
                     .enter().append('text')
-                    .attr('class', 'link-label')
+                .attr('class', 'link-label')
                     .text(d => d.action)
                     .attr('text-anchor', 'middle');
                 
@@ -328,7 +370,14 @@ with open('templates/index.html', 'w') as f:
             }).catch(error => {
                 console.error('Error loading graph:', error);
                 document.querySelector('.loading').remove();
-                alert('Error al cargar el grafo');
+                const errorDiv = document.createElement('div');
+                errorDiv.className = 'loading';
+                errorDiv.style.color = 'red';
+                errorDiv.innerHTML = `
+                    <h3>Error de conexión</h3>
+                    <p>No se pudo cargar el grafo. Verifica que el servidor esté funcionando.</p>
+                `;
+                document.getElementById('graph-container').appendChild(errorDiv);
             });
         }
         
@@ -342,7 +391,10 @@ with open('templates/index.html', 'w') as f:
                 {type: 'Person', color: '#ff6b6b'},
                 {type: 'Organization', color: '#4ecdc4'},
                 {type: 'Location', color: '#45b7d1'},
-                {type: 'Date', color: '#96ceb4'}
+                {type: 'Date', color: '#96ceb4'},
+                {type: 'Event', color: '#ff9ff3'},
+                {type: 'Object', color: '#feca57'},
+                {type: 'Code', color: '#54a0ff'}
             ];
             
             legend.selectAll('.legend-item')
@@ -361,7 +413,7 @@ with open('templates/index.html', 'w') as f:
                         .text(d.type);
                 });
         }
-        
+                
         // Funciones de simulación
         function ticked() {
             links
@@ -375,21 +427,21 @@ with open('templates/index.html', 'w') as f:
         }
         
         function dragstarted(event, d) {
-            if (!event.active) simulation.alphaTarget(0.3).restart();
-            d.fx = d.x;
-            d.fy = d.y;
-        }
-        
-        function dragged(event, d) {
-            d.fx = event.x;
-            d.fy = event.y;
-        }
-        
+                if (!event.active) simulation.alphaTarget(0.3).restart();
+                d.fx = d.x;
+                d.fy = d.y;
+            }
+            
+            function dragged(event, d) {
+                d.fx = event.x;
+                d.fy = event.y;
+            }
+            
         function dragended(event, d) {
-            if (!event.active) simulation.alphaTarget(0);
-            d.fx = null;
-            d.fy = null;
-        }
+                if (!event.active) simulation.alphaTarget(0);
+                d.fx = null;
+                d.fy = null;
+            }
         
         // Controles de zoom
         document.getElementById('zoom-in').addEventListener('click', function() {
@@ -430,6 +482,19 @@ def get_graph():
         # Conectar a la base de datos
         graph_db = EntityGraph()
         
+        # Verificar si hay datos en la base de datos
+        with graph_db.driver.session() as session:
+            # Contar entidades
+            count_result = session.run("MATCH (e:Entity) RETURN count(e) as count")
+            entity_count = count_result.single()["count"]
+            
+            if entity_count == 0:
+                return jsonify({
+                    "nodes": [],
+                    "links": [],
+                    "message": "La base de datos está vacía. Analiza un documento primero usando: python main.py --file/--url/--pdf <archivo> --store-db"
+                })
+        
         # Obtener datos del grafo con filtros
         graph_data = graph_db.get_entity_graph(limit=100)
         
@@ -442,10 +507,19 @@ def get_graph():
             graph_data['links'] = [link for link in graph_data['links'] 
                                  if link.get('source', 'explicit') in relation_types]
         
+        # Añadir información sobre el estado de los datos
+        if not graph_data['nodes']:
+            graph_data['message'] = "No se encontraron entidades con los filtros aplicados"
+        else:
+            graph_data['message'] = f"Mostrando {len(graph_data['nodes'])} entidades y {len(graph_data['links'])} relaciones"
+        
         return jsonify(graph_data)
         
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({
+            'error': str(e),
+            'message': 'Error al conectar con la base de datos. Asegúrate de que Neo4j esté corriendo.'
+        }), 500
 
 if __name__ == '__main__':
     # Usar configuración de Flask desde config.py
