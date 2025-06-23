@@ -65,6 +65,12 @@ class EnhancedEntityRelationshipExtractor:
                 logger.error("No se pudieron extraer entidades del texto")
                 return self._create_error_response("Error en la extracción de entidades")
             
+            # Verificar si hay error en los metadatos
+            metadata = entities_result['documentAnalysis'].get('metadata', {})
+            if 'error' in metadata:
+                logger.error(f"Error en extracción de entidades: {metadata['error']}")
+                return entities_result  # Retornar el error tal como viene
+            
             entities = entities_result['documentAnalysis']['entities']
             logger.info(f"Entidades extraídas: {sum(len(ents) for ents in entities.values())}")
             
@@ -90,7 +96,7 @@ class EnhancedEntityRelationshipExtractor:
             result = {
                 "documentAnalysis": {
                     "metadata": {
-                "title": doc_title,
+                        "title": doc_title,
                         "analysisDate": datetime.now().isoformat(),
                         "language": language,
                         "provider": self.provider_name
@@ -122,24 +128,40 @@ class EnhancedEntityRelationshipExtractor:
         try:
             logger.info(f"Analizando PDF con proveedor: {self.provider_name}")
             
-            # The llm provider will do the heavy lifting
-            analysis_result = self.llm_provider.analyze_pdf(pdf_content)
-
-            if not analysis_result or 'documentAnalysis' not in analysis_result:
-                logger.error("No se pudo analizar el PDF, la respuesta del LLM no es válida.")
-                return self._create_error_response("Respuesta inválida del LLM durante el análisis del PDF")
-
-            # Add metadata to the result from the provider
-            analysis_result['documentAnalysis']['metadata'] = {
-                "title": doc_title,
-                "analysisDate": datetime.now().isoformat(),
-                "language": language,
-                "provider": self.provider_name
-            }
+            # Usar el método analyze_pdf del proveedor que ya maneja PDFs grandes
+            result = self.llm_provider.analyze_pdf(pdf_content)
+            
+            if self.debug_mode:
+                logger.info(f"[DEBUG] Resultado completo del análisis de PDF: {json.dumps(result, indent=2, ensure_ascii=False)}")
+            
+            if not result or 'documentAnalysis' not in result:
+                logger.error("No se pudieron obtener resultados del análisis del PDF")
+                return self._create_error_response("Error en el análisis del PDF")
+            
+            # Verificar si hay error en los metadatos
+            metadata = result['documentAnalysis'].get('metadata', {})
+            if 'error' in metadata:
+                logger.error(f"Error en análisis de PDF: {metadata['error']}")
+                return result  # Retornar el error tal como viene
+            
+            # Asegurar que metadata existe
+            if 'metadata' not in result['documentAnalysis']:
+                result['documentAnalysis']['metadata'] = {}
+            result['documentAnalysis']['metadata'].update({
+                'title': doc_title,
+                'language': language,
+                'provider': self.provider_name
+            })
+            
+            entities = result['documentAnalysis']['entities']
+            relationships = result['documentAnalysis'].get('relationships', [])
+            
+            logger.info(f"Entidades extraídas del PDF: {sum(len(ents) for ents in entities.values())}")
+            logger.info(f"Relaciones encontradas en PDF: {len(relationships)}")
             
             logger.info("Análisis de PDF completado exitosamente")
-            return analysis_result
-                
+            return result
+            
         except Exception as e:
             logger.error(f"Error durante el análisis del PDF: {str(e)}", exc_info=True)
             return self._create_error_response(f"Error en el análisis del PDF: {str(e)}")
