@@ -1,462 +1,201 @@
 from typing import Dict, List, Any
-from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import HumanMessage, SystemMessage
-import json
 from datetime import datetime
-import os
+import json
 import re
-from dotenv import load_dotenv
 import logging
+from config import AppConfig
+from llm_providers import LLMProviderFactory
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Load environment variables
-load_dotenv()
-
-# Check for required environment variables
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-if not ANTHROPIC_API_KEY:
-    raise ValueError(
-        "ANTHROPIC_API_KEY environment variable is not set. "
-        "Please set it in your .env file or environment variables."
-    )
-
 class EnhancedEntityRelationshipExtractor:
-    """Extracts named entities and relationships from text using Claude with enhanced relation extraction."""
+    """Extracts named entities and relationships from text using multiple LLM providers."""
     
-    def __init__(self):
-        self.model = ChatAnthropic(
-            model="claude-3-5-haiku-20241022",
-            temperature=0,
-            anthropic_api_key=ANTHROPIC_API_KEY,
-            max_tokens=8192  # Increased max tokens for larger responses
-        )
-        self.relationship_model = ChatAnthropic(
-            model="claude-3-5-haiku-20241022",
-            temperature=0.2,  # Slightly higher temperature for more creative relationship extraction
-            anthropic_api_key=ANTHROPIC_API_KEY,
-            max_tokens=4096
-        )
-
-    def _create_extraction_prompt(self, text: str) -> str:
-        """Creates the system prompt for entity extraction."""
-        return f"""Analyze the provided text to extract named entities (Person, Organization, Location, and Date).
-- For each entity, include any aliases or pronouns by which the entity is referenced.
-- Include a spanish translation only for:
-  * Traditional place names that have official or commonly used Spanish versions (e.g., London -> Londres, New York -> Nueva York)
-  * Dates in standard format
-  * Do NOT translate widely recognized names, technology hubs, company names, or branded terms (e.g., Silicon Valley, Wall Street, Times Square)
-- Identify relevant dates as "Date" entities.
-- Be thorough and extract ALL entities mentioned in the text, even if they are only mentioned once.
-- Be comprehensive in identifying aliases and coreferences.
-- Output the result strictly as JSON, following the exact structure and formatting shown in the example.
-- Do not provide any additional text, explanation, or commentary—only the JSON.
-
-Example Input: Alberto was born on January 1, 1990. In 2010, he joined ACME Inc. and moved to Paris. He was often called "The Greatest" during his time at ACME Inc. In 2015, the young guy traveled to London with his colleagues.
-
-Expected Output:
-{{
-    "documentAnalysis": {{
-        "entities": {{
-            "Person": [
-            {{
-                "name": "Alberto",
-                "aliases": ["he", "The Greatest", "the young guy"],
-                "spanish": "Alberto"
-            }}],
-            "Organization": [
-            {{
-                "name": "ACME Inc.",
-                "aliases": [],
-                "spanish": ""
-            }}],
-            "Location": [
-            {{
-                "name": "Paris",
-                "aliases": [],
-                "spanish": "París"
-            }},
-            {{
-                "name": "London",
-                "aliases": [],
-                "spanish": "Londres"
-            }}],
-            "Date": [
-            {{
-                "name": "January 1, 1990",
-                "year": "1990",
-                "aliases": [],
-                "spanish": "1 de enero de 1990"
-            }},
-            {{
-                "name": "2010",
-                "year": "2010",
-                "aliases": [],
-                "spanish": ""
-            }},
-            {{
-                "name": "2015",
-                "year": "2015",
-                "aliases": [],
-                "spanish": ""
-            }}
-            ]
-        }}
-    }}
-}}
-
-Text to analyze:
-{text}"""
-
-    def _create_relationship_prompt(self, text: str, entities: Dict) -> str:
-        """Creates a prompt specifically for relationship extraction using extracted entities."""
-        # Create formatted lists of entities by type
-        entity_lists = {}
+    def __init__(self, provider_name: str = None):
+        """
+        Initialize the extractor with a specific LLM provider.
         
-        for entity_type, entity_items in entities.items():
-            entity_lists[entity_type] = [item["name"] for item in entity_items]
+        Args:
+            provider_name (str, optional): Name of the LLM provider to use.
+                If None, uses the default provider from configuration.
+        """
+        # Validar configuración antes de inicializar
+        if not AppConfig.validate_config():
+            raise ValueError("Configuración inválida. Revisa los errores anteriores.")
         
-        # Format entities as text for the prompt
-        entity_text = ""
-        for entity_type, entities in entity_lists.items():
-            if entities:
-                entity_text += f"{entity_type} entities: {', '.join(entities)}\n"
+        self.provider_name = provider_name or AppConfig.DEFAULT_LLM_PROVIDER
+        logger.info(f"Inicializando extractor con proveedor: {self.provider_name}")
         
-        return f"""Analyze the provided text to identify Subject-Action-Object (SAO) relationships between entities. 
-I've already identified the following entities in the text:
-
-{entity_text}
-
-Instructions:
-- Extract ONLY relationships where both subject and object are from the provided entity lists.
-- Relationships must follow Subject-Action-Object format, where both subject and object are entities.
-- Focus on explicit relationships mentioned in the text AND strongly implied relationships.
-- Be creative and thorough in identifying relationships between entities, even if the connection is indirect.
-- For each entity pair, try to find at least one relationship if any connection exists in the text.
-- Use actions that clearly describe the nature of the relationship.
-- Look for relationships in both directions between entity pairs.
-- If an entity belongs to a company, organization, or place, create that relationship.
-
-Example of inferred relationships:
-1. If "John Smith" and "Acme Corp" are mentioned in the same context and John is described as working there, infer "John Smith - works at - Acme Corp"
-2. If "Microsoft" released a product in "Seattle", infer "Microsoft - is based in - Seattle"
-3. If "Dr. Jane" published research in "2021", infer "Dr. Jane - published in - 2021"
-
-Output Format:
-Return ONLY a JSON array of relationships with no additional explanation or text. Each relationship should include:
-- subject: Object with 'type' and 'name' matching an entity in the provided list
-- action: String describing the relationship
-- object: Object with 'type' and 'name' matching an entity in the provided list
-
-Example Output:
-[
-  {{
-    "subject": {{
-      "type": "Person",
-      "name": "Alberto"
-    }},
-    "action": "joined",
-    "object": {{
-      "type": "Organization",
-      "name": "ACME Inc."
-    }}
-  }},
-  {{
-    "subject": {{
-      "type": "Person",
-      "name": "Alberto"
-    }},
-    "action": "moved to",
-    "object": {{
-      "type": "Location",
-      "name": "Paris"
-    }}
-  }},
-  {{
-    "subject": {{
-      "type": "Person",
-      "name": "Alberto"
-    }},
-    "action": "traveled to",
-    "object": {{
-      "type": "Location",
-      "name": "London"
-    }}
-  }}
-]
-
-Text to analyze for relationships:
-{text}"""
-
-    def _create_additional_relationships_prompt(self, entities: Dict) -> str:
-        """Creates a prompt to infer additional relationships based only on the entities."""
-        # Create formatted lists of entities by type
-        entity_text = ""
-        for entity_type, entity_items in entities.items():
-            if entity_items:
-                entity_names = [item["name"] for item in entity_items]
-                entity_text += f"{entity_type} entities: {', '.join(entity_names)}\n"
-        
-        return f"""Based only on the following list of entities extracted from a document, infer logical relationships that likely exist between them.
-
-{entity_text}
-
-Instructions:
-- Infer logical Subject-Action-Object relationships between these entities even without seeing the original text.
-- Focus on creating connections between otherwise isolated entities.
-- Use your knowledge of how these types of entities typically relate to each other.
-- Be creative but reasonable in your inferences.
-- Focus especially on:
-  * Relationships between organizations and locations (headquarters, operations)
-  * Relationships between people and organizations (employment, leadership)
-  * Relationships between dates and major events
-  * Logical connections between locations (is near, is part of)
-
-Common patterns to consider:
-- Organizations are typically located in Places
-- Organizations are typically founded/established on Dates
-- People typically work for Organizations
-- People typically live in/visit Locations
-- Events typically happen on Dates
-- Locations can be geographically related to other Locations
-
-Output Format:
-Return ONLY a JSON array of relationships with no additional explanation or text. Each relationship should include:
-- subject: Object with 'type' and 'name' matching an entity from the list
-- action: String describing the relationship
-- object: Object with 'type' and 'name' matching an entity from the list
-
-Example Output:
-[
-  {{
-    "subject": {{
-      "type": "Organization",
-      "name": "Microsoft"
-    }},
-    "action": "is headquartered in",
-    "object": {{
-      "type": "Location",
-      "name": "Seattle"
-    }}
-  }},
-  {{
-    "subject": {{
-      "type": "Person",
-      "name": "John Smith"
-    }},
-    "action": "likely works at",
-    "object": {{
-      "type": "Organization",
-      "name": "Acme Corp"
-    }}
-  }}
-]
-
-Be thorough but only make reasonable inferences based on the entity types and common knowledge."""
+        try:
+            self.llm_provider = LLMProviderFactory.create_provider(self.provider_name)
+            logger.info(f"Proveedor {self.provider_name} inicializado correctamente")
+        except Exception as e:
+            logger.error(f"Error al inicializar proveedor {self.provider_name}: {str(e)}")
+            raise
 
     def analyze_text(self, text: str, doc_title: str = "Untitled Document", language: str = "en") -> Dict:
-        """Analyzes text to extract entities and relationships using a two-step process."""
+        """
+        Analyze text to extract entities and relationships.
+        
+        Args:
+            text (str): Text to analyze
+            doc_title (str): Title of the document
+            language (str): Language of the text
+            
+        Returns:
+            Dict: Analysis results with entities and relationships
+        """
         try:
-            # Step 1: Extract entities
-            entities_result = self._extract_entities(text)
+            logger.info(f"Analizando texto con proveedor: {self.provider_name}")
             
-            if 'documentAnalysis' not in entities_result:
-                logger.error("Failed to extract entities")
-                return self._create_error_response("Failed to extract entities")
+            # Extract entities
+            logger.info("Extrayendo entidades...")
+            entities_result = self.llm_provider.extract_entities(text)
             
-            doc_analysis = entities_result['documentAnalysis']
+            if not entities_result or 'documentAnalysis' not in entities_result:
+                logger.error("No se pudieron extraer entidades del texto")
+                return self._create_error_response("Error en la extracción de entidades")
             
-            if 'entities' not in doc_analysis:
-                logger.error("No entities found in analysis response")
-                return self._create_error_response("No entities found in response")
+            entities = entities_result['documentAnalysis']['entities']
+            logger.info(f"Entidades extraídas: {sum(len(ents) for ents in entities.values())}")
             
-            entities = doc_analysis['entities']
+            # Extract explicit relationships
+            logger.info("Extrayendo relaciones explícitas...")
+            explicit_relationships = self.llm_provider.extract_relationships(text, entities)
+            if not isinstance(explicit_relationships, list):
+                explicit_relationships = []
+            logger.info(f"Relaciones explícitas encontradas: {len(explicit_relationships)}")
             
-            # Step 2: Extract explicit relationships from text using entities
-            explicit_relationships = self._extract_relationships(text, entities)
+            # Infer additional relationships
+            logger.info("Inferiendo relaciones adicionales...")
+            inferred_relationships = self.llm_provider.infer_additional_relationships(entities)
+            if not isinstance(inferred_relationships, list):
+                inferred_relationships = []
+            logger.info(f"Relaciones inferidas: {len(inferred_relationships)}")
             
-            # Step 3: Infer additional relationships based on entities only
-            inferred_relationships = self._infer_additional_relationships(entities)
+            # Merge relationships
+            all_relationships = self._merge_relationships(explicit_relationships, inferred_relationships)
+            logger.info(f"Total de relaciones: {len(all_relationships)}")
             
-            # Combine relationships, removing duplicates
-            combined_relationships = self._merge_relationships(explicit_relationships, inferred_relationships)
-            
-            # Add metadata
-            doc_analysis['metadata'] = {
-                "title": doc_title,
-                "analysisDate": datetime.now().strftime("%Y-%m-%d"),
-                "language": language
+            # Create final result
+            result = {
+                "documentAnalysis": {
+                    "metadata": {
+                        "title": doc_title,
+                        "analysisDate": datetime.now().isoformat(),
+                        "language": language,
+                        "provider": self.provider_name
+                    },
+                    "entities": entities,
+                    "relationships": all_relationships
+                }
             }
             
-            # Add relationships to result
-            doc_analysis['relationships'] = combined_relationships
-            
-            return entities_result
+            logger.info("Análisis completado exitosamente")
+            return result
             
         except Exception as e:
-            logger.error(f"Error in text analysis: {str(e)}")
-            return self._create_error_response(f"Analysis failed: {str(e)}")
-    
-    def _extract_entities(self, text: str) -> Dict:
-        """Extract entities from text."""
-        try:
-            messages = [
-                SystemMessage(content="""You are an expert at extracting entities from text.
-Output ONLY valid JSON with no additional text or explanation.
-Follow the example structure EXACTLY, including all fields."""),
-                HumanMessage(content=self._create_extraction_prompt(text))
-            ]
-            
-            # Get model response
-            response = self.model.invoke(messages)
-            
-            try:
-                # Parse the JSON response
-                content = response.content.strip()
-                if not (content.startswith('{') and content.endswith('}')):
-                    logger.warning(f"Received incomplete JSON response: {content[:100]}...")
-                    return self._create_error_response("Incomplete JSON response")
-                
-                result = json.loads(content)
-                return result
-                
-            except json.JSONDecodeError as e:
-                logger.error(f"Error parsing JSON: {str(e)}")
-                logger.debug(f"Response content: {response.content[:200]}...")
-                return self._create_error_response("Failed to parse JSON response")
-                
-        except Exception as e:
-            logger.error(f"Error in entity extraction: {str(e)}")
-            return self._create_error_response(f"Entity extraction failed: {str(e)}")
+            logger.error(f"Error durante el análisis: {str(e)}")
+            return self._create_error_response(f"Error en el análisis: {str(e)}")
 
-    def _extract_relationships(self, text: str, entities: Dict) -> List[Dict]:
-        """Extract relationships between entities from text."""
+    def analyze_pdf(self, pdf_content: bytes, doc_title: str = "Untitled Document", language: str = "en") -> Dict:
+        """
+        Analyze a PDF document to extract entities and relationships.
+        
+        Args:
+            pdf_content (bytes): The content of the PDF file
+            doc_title (str): Title of the document
+            language (str): Language of the document
+            
+        Returns:
+            Dict: Analysis results with entities and relationships
+        """
         try:
-            messages = [
-                SystemMessage(content="""You are an expert at extracting relationships between entities.
-Output ONLY valid JSON with no additional text or explanation.
-Follow the example structure EXACTLY, including all fields."""),
-                HumanMessage(content=self._create_relationship_prompt(text, entities))
-            ]
+            logger.info(f"Analizando PDF con proveedor: {self.provider_name}")
             
-            # Get model response
-            response = self.relationship_model.invoke(messages)
-            
-            try:
-                # Parse the JSON response
-                content = response.content.strip()
-                
-                # Extract JSON array if embedded in backticks or other formatting
-                json_match = re.search(r'(\[.*?\])', content, re.DOTALL)
-                if json_match:
-                    content = json_match.group(1)
-                
-                relationships = json.loads(content)
-                return relationships
-                
-            except json.JSONDecodeError as e:
-                logger.error(f"Error parsing relationships JSON: {str(e)}")
-                logger.debug(f"Response content: {response.content[:200]}...")
-                return []
-                
-        except Exception as e:
-            logger.error(f"Error in relationship extraction: {str(e)}")
-            return []
+            # The llm provider will do the heavy lifting
+            analysis_result = self.llm_provider.analyze_pdf(pdf_content)
 
-    def _infer_additional_relationships(self, entities: Dict) -> List[Dict]:
-        """Infer additional relationships based only on the entities."""
-        try:
-            messages = [
-                SystemMessage(content="""You are an expert at inferring logical relationships between entities.
-Output ONLY valid JSON with no additional text or explanation.
-Follow the example structure EXACTLY, including all fields."""),
-                HumanMessage(content=self._create_additional_relationships_prompt(entities))
-            ]
+            if not analysis_result or 'documentAnalysis' not in analysis_result:
+                logger.error("No se pudo analizar el PDF, la respuesta del LLM no es válida.")
+                return self._create_error_response("Respuesta inválida del LLM durante el análisis del PDF")
+
+            # Add metadata to the result from the provider
+            analysis_result['documentAnalysis']['metadata'] = {
+                "title": doc_title,
+                "analysisDate": datetime.now().isoformat(),
+                "language": language,
+                "provider": self.provider_name
+            }
             
-            # Get model response
-            response = self.relationship_model.invoke(messages)
-            
-            try:
-                # Parse the JSON response
-                content = response.content.strip()
-                
-                # Extract JSON array if embedded in backticks or other formatting
-                json_match = re.search(r'(\[.*?\])', content, re.DOTALL)
-                if json_match:
-                    content = json_match.group(1)
-                
-                relationships = json.loads(content)
-                
-                # Tag inferred relationships
-                for rel in relationships:
-                    # Add a flag to indicate this is an inferred relationship
-                    rel["inferred"] = True
-                
-                return relationships
-                
-            except json.JSONDecodeError as e:
-                logger.error(f"Error parsing inferred relationships JSON: {str(e)}")
-                logger.debug(f"Response content: {response.content[:200]}...")
-                return []
-                
+            logger.info("Análisis de PDF completado exitosamente")
+            return analysis_result
+
         except Exception as e:
-            logger.error(f"Error in relationship inference: {str(e)}")
-            return []
+            logger.error(f"Error durante el análisis del PDF: {str(e)}", exc_info=True)
+            return self._create_error_response(f"Error en el análisis del PDF: {str(e)}")
 
     def _merge_relationships(self, explicit_relationships: List[Dict], inferred_relationships: List[Dict]) -> List[Dict]:
-        """Merge explicit and inferred relationships, removing duplicates."""
-        # Create a set of relationship signatures for deduplication
-        relationship_signatures = set()
-        merged_relationships = []
+        """
+        Merge explicit and inferred relationships, removing duplicates.
         
-        # Process explicit relationships first (we prioritize these)
+        Args:
+            explicit_relationships (List[Dict]): Relationships explicitly found in text
+            inferred_relationships (List[Dict]): Relationships inferred from entities
+            
+        Returns:
+            List[Dict]: Merged and deduplicated relationships
+        """
+        all_relationships = []
+        seen_relationships = set()
+        
+        # Add explicit relationships first
         for rel in explicit_relationships:
-            # Create a signature for this relationship
-            signature = (
-                rel["subject"]["type"],
-                rel["subject"]["name"],
-                rel["action"],
-                rel["object"]["type"],
-                rel["object"]["name"]
-            )
-            
-            if signature not in relationship_signatures:
-                relationship_signatures.add(signature)
-                # Add type to make it compatible with original structure
-                if "type" not in rel:
-                    rel["type"] = "SAO"
-                merged_relationships.append(rel)
+            if self._is_valid_relationship(rel):
+                rel_key = self._create_relationship_key(rel)
+                if rel_key not in seen_relationships:
+                    rel["source"] = "explicit"
+                    all_relationships.append(rel)
+                    seen_relationships.add(rel_key)
         
-        # Then add inferred relationships if they don't duplicate existing ones
+        # Add inferred relationships (avoiding duplicates)
         for rel in inferred_relationships:
-            # Create a signature for this relationship
-            signature = (
-                rel["subject"]["type"],
-                rel["subject"]["name"],
-                rel["action"],
-                rel["object"]["type"],
-                rel["object"]["name"]
-            )
-            
-            if signature not in relationship_signatures:
-                relationship_signatures.add(signature)
-                # Add type to make it compatible with original structure
-                if "type" not in rel:
-                    rel["type"] = "SAO"
-                merged_relationships.append(rel)
+            if self._is_valid_relationship(rel):
+                rel_key = self._create_relationship_key(rel)
+                if rel_key not in seen_relationships:
+                    rel["source"] = "inferred"
+                    all_relationships.append(rel)
+                    seen_relationships.add(rel_key)
         
-        return merged_relationships
-    
+        return all_relationships
+
+    def _is_valid_relationship(self, relationship: Dict) -> bool:
+        """Check if a relationship has the required structure."""
+        required_keys = ["subject", "action", "object"]
+        return all(key in relationship for key in required_keys)
+
+    def _create_relationship_key(self, relationship: Dict) -> str:
+        """Create a unique key for a relationship to detect duplicates."""
+        subject = relationship.get("subject", {})
+        object_ = relationship.get("object", {})
+        action = relationship.get("action", "")
+        
+        subject_key = f"{subject.get('type', '')}:{subject.get('name', '')}"
+        object_key = f"{object_.get('type', '')}:{object_.get('name', '')}"
+        
+        return f"{subject_key}|{action}|{object_key}"
+
     def _create_error_response(self, error_message: str) -> Dict:
-        """Creates a structured error response."""
+        """Create an error response with the specified message."""
         return {
             "documentAnalysis": {
                 "metadata": {
                     "title": "Error",
-                    "analysisDate": datetime.now().strftime("%Y-%m-%d"),
+                    "analysisDate": datetime.now().isoformat(),
                     "language": "en",
+                    "provider": self.provider_name,
                     "error": error_message
                 },
                 "entities": {
@@ -467,4 +206,12 @@ Follow the example structure EXACTLY, including all fields."""),
                 },
                 "relationships": []
             }
+        }
+
+    def get_provider_info(self) -> Dict[str, Any]:
+        """Get information about the current LLM provider."""
+        return {
+            "provider": self.provider_name,
+            "available_providers": LLMProviderFactory.get_available_providers(),
+            "default_provider": AppConfig.DEFAULT_LLM_PROVIDER
         }

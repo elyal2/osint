@@ -1,10 +1,7 @@
 from flask import Flask, render_template, jsonify, request
 from graph_database import EntityGraph
+from config import AppConfig
 import os
-from dotenv import load_dotenv
-
-# Load environment variables
-load_dotenv()
 
 app = Flask(__name__)
 app.config['TEMPLATES_AUTO_RELOAD'] = True
@@ -199,305 +196,221 @@ with open('templates/index.html', 'w') as f:
                 url += `relation_type=${filter}&`;
             });
             
-            // Eliminar el contenedor del grafo actual
-            d3.select("#graph-container svg").remove();
-            
-            // Mostrar indicador de carga
-            const loading = d3.select("#graph-container")
-                .append("div")
-                .attr("class", "loading")
-                .text("Cargando grafo...");
-            
-            // Cargar los datos filtrados
-            fetch(url)
-                .then(response => response.json())
-                .then(data => {
-                    loading.remove();
-                    renderGraph(data);
-                })
-                .catch(error => {
-                    loading.text("Error al cargar el grafo: " + error);
-                    console.error('Error loading graph data:', error);
-                });
+            // Cargar el grafo con los filtros
+            loadGraph(url);
         }
         
-        // Modificar la carga inicial para usar la misma función
-        document.addEventListener('DOMContentLoaded', function() {
-            loadGraphWithFilters();
-        });
+        // Variables globales para el grafo
+        let svg, simulation, nodes, links;
+        let width, height;
         
-        function renderGraph(data) {
-            // Si no hay datos, mostrar mensaje
-            if (!data.nodes || data.nodes.length === 0) {
-                d3.select("#graph-container")
-                    .append("div")
-                    .attr("class", "loading")
-                    .text("No hay datos para mostrar con los filtros seleccionados");
-                return;
-            }
-            
+        // Función para inicializar el grafo
+        function initGraph() {
             const container = document.getElementById('graph-container');
-            const width = container.clientWidth;
-            const height = container.clientHeight;
+            width = container.clientWidth;
+            height = container.clientHeight;
             
-            // Create SVG
-            const svg = d3.select('#graph-container')
+            // Crear SVG
+            svg = d3.select('#graph-container')
                 .append('svg')
                 .attr('width', width)
                 .attr('height', height);
             
-            // Create tooltip
+            // Crear tooltip
             const tooltip = d3.select('body')
                 .append('div')
                 .attr('class', 'tooltip')
                 .style('opacity', 0);
             
-            // Add zoom functionality
-            const g = svg.append('g');
-            const zoom = d3.zoom()
-                .scaleExtent([0.1, 4])
-                .on('zoom', (event) => {
-                    g.attr('transform', event.transform);
-                });
-                
-            svg.call(zoom);
+            // Crear simulación
+            simulation = d3.forceSimulation()
+                .force('link', d3.forceLink().id(d => d.id).distance(100))
+                .force('charge', d3.forceManyBody().strength(-300))
+                .force('center', d3.forceCenter(width / 2, height / 2));
             
-            // Zoom controls
-            d3.select('#zoom-in').on('click', () => {
-                svg.transition().call(zoom.scaleBy, 1.3);
-            });
+            // Cargar datos iniciales
+            loadGraph('/api/graph');
+        }
+        
+        // Función para cargar el grafo
+        function loadGraph(url) {
+            // Mostrar loading
+            const loading = document.createElement('div');
+            loading.className = 'loading';
+            loading.textContent = 'Cargando grafo...';
+            document.getElementById('graph-container').appendChild(loading);
             
-            d3.select('#zoom-out').on('click', () => {
-                svg.transition().call(zoom.scaleBy, 0.7);
-            });
-            
-            d3.select('#reset').on('click', () => {
-                svg.transition().call(zoom.transform, d3.zoomIdentity);
-            });
-            
-            // Handle missing UUID values
-            data.nodes.forEach(node => {
-                if (!node.id) {
-                    node.id = 'node_' + Math.random().toString(36).substr(2, 9);
-                }
-            });
-            
-            data.relationships.forEach(rel => {
-                if (!rel.source) {
-                    rel.source = 'rel_source_' + Math.random().toString(36).substr(2, 9);
-                }
-                if (!rel.target) {
-                    rel.target = 'rel_target_' + Math.random().toString(36).substr(2, 9);
-                }
-            });
-            
-            // Create force simulation
-            const simulation = d3.forceSimulation(data.nodes)
-                .force('link', d3.forceLink(data.relationships)
-                    .id(d => d.id)
-                    .distance(150))
-                .force('charge', d3.forceManyBody().strength(-500))
-                .force('center', d3.forceCenter(width / 2, height / 2))
-                .force('collide', d3.forceCollide().radius(60));
-            
-            // Define entity type colors
-            const typeColors = {
-                'Person': '#5470C6',
-                'Organization': '#91CC75',
-                'Location': '#EE6666',
-                'Date': '#73C0DE'
-            };
-            
-            // Create legend
-            const legend = svg.append('g')
-                .attr('class', 'legend')
-                .attr('transform', 'translate(' + (width - 150) + ',20)');
+            d3.json(url).then(data => {
+                // Remover loading
+                document.querySelector('.loading').remove();
                 
-            const legendBg = legend.append('rect')
-                .attr('width', 120)
-                .attr('height', 110)
-                .attr('fill', 'white')
-                .attr('stroke', '#ccc')
-                .attr('rx', 5);
+                // Limpiar grafo anterior
+                svg.selectAll('*').remove();
                 
-            const legendTitle = legend.append('text')
-                .attr('x', 10)
-                .attr('y', 20)
-                .text('Entity Types')
-                .style('font-weight', 'bold');
+                // Crear enlaces
+                links = svg.append('g')
+                    .selectAll('line')
+                    .data(data.links)
+                    .enter().append('line')
+                    .attr('class', 'link')
+                    .style('stroke', d => d.source === 'explicit' ? '#ff6b6b' : '#4ecdc4');
                 
-            const legendItems = legend.selectAll('.legend-item')
-                .data(Object.entries(typeColors))
-                .enter()
-                .append('g')
-                .attr('class', 'legend-item')
-                .attr('transform', (d, i) => 'translate(10,' + (i * 20 + 30) + ')');
+                // Crear nodos
+                nodes = svg.append('g')
+                    .selectAll('g')
+                    .data(data.nodes)
+                    .enter().append('g')
+                    .attr('class', 'node')
+                    .call(d3.drag()
+                        .on('start', dragstarted)
+                        .on('drag', dragged)
+                        .on('end', dragended));
                 
-            legendItems.append('circle')
-                .attr('r', 6)
-                .attr('fill', d => d[1]);
+                // Añadir círculos a los nodos
+                nodes.append('circle')
+                    .attr('r', 8)
+                    .style('fill', d => {
+                        switch(d.type) {
+                            case 'Person': return '#ff6b6b';
+                            case 'Organization': return '#4ecdc4';
+                            case 'Location': return '#45b7d1';
+                            case 'Date': return '#96ceb4';
+                            default: return '#feca57';
+                        }
+                    });
                 
-            legendItems.append('text')
-                .attr('x', 15)
-                .attr('y', 4)
-                .text(d => d[0])
-                .style('font-size', '12px');
-            
-            // Draw links
-            const link = g.append('g')
-                .selectAll('g')
-                .data(data.relationships)
-                .enter()
-                .append('g');
-            
-            const path = link.append('path')
-                .attr('class', 'link')
-                .attr('stroke', d => d.type === 'inferred' ? '#d99' : '#999')  // Color diferente para relaciones inferidas
-                .attr('stroke-dasharray', d => d.type === 'inferred' ? '5,5' : null)  // Línea punteada para inferidas
-                .attr('stroke-width', d => d.type === 'inferred' ? '1px' : '1.5px')  // Línea más delgada para inferidas
-                .attr('marker-end', 'url(#arrow)');
-            
-            // Add legend for relationship types
-            const relLegend = svg.append('g')
-                .attr('class', 'legend')
-                .attr('transform', 'translate(' + (width - 150) + ',140)');
+                // Añadir etiquetas a los nodos
+                nodes.append('text')
+                    .attr('class', 'node-label')
+                    .attr('dx', 12)
+                    .attr('dy', '.35em')
+                    .text(d => d.name);
                 
-            const relLegendBg = relLegend.append('rect')
-                .attr('width', 120)
-                .attr('height', 70)
-                .attr('fill', 'white')
-                .attr('stroke', '#ccc')
-                .attr('rx', 5);
+                // Añadir etiquetas a los enlaces
+                svg.append('g')
+                    .selectAll('text')
+                    .data(data.links)
+                    .enter().append('text')
+                    .attr('class', 'link-label')
+                    .text(d => d.action)
+                    .attr('text-anchor', 'middle');
                 
-            const relLegendTitle = relLegend.append('text')
-                .attr('x', 10)
-                .attr('y', 20)
-                .text('Relationship Types')
-                .style('font-weight', 'bold');
+                // Actualizar simulación
+                simulation
+                    .nodes(data.nodes)
+                    .on('tick', ticked);
                 
-            // Relationship types legend
-            const relTypes = [
-                {name: 'Explicit', color: '#999', dashed: false},
-                {name: 'Inferred', color: '#d99', dashed: true}
-            ];
-
-            const relLegendItems = relLegend.selectAll('.rel-legend-item')
-                .data(relTypes)
-                .enter()
-                .append('g')
-                .attr('class', 'legend-item')
-                .attr('transform', (d, i) => 'translate(10,' + (i * 20 + 30) + ')');
+                simulation.force('link')
+                    .links(data.links);
                 
-            relLegendItems.append('line')
-                .attr('x1', 0)
-                .attr('y1', 0)
-                .attr('x2', 20)
-                .attr('y2', 0)
-                .attr('stroke', d => d.color)
-                .attr('stroke-width', 2)
-                .attr('stroke-dasharray', d => d.dashed ? '3,3' : null);
-                
-            relLegendItems.append('text')
-                .attr('x', 25)
-                .attr('y', 4)
-                .text(d => d.name)
-                .style('font-size', '12px');
-                
-            const linkLabels = link.append('text')
-                .attr('class', 'link-label')
-                .attr('dy', -5)
-                .append('textPath')
-                .attr('xlink:href', (d, i) => '#linkPath' + i)
-                .attr('startOffset', '50%')
-                .attr('text-anchor', 'middle')
-                .text(d => d.action);
-            
-            // Draw nodes
-            const node = g.append('g')
-                .selectAll('g')
-                .data(data.nodes)
-                .enter()
-                .append('g')
-                .attr('class', 'node')
-                .on('mouseover', function(event, d) {
+                // Eventos de hover
+                nodes.on('mouseover', function(event, d) {
                     tooltip.transition()
                         .duration(200)
                         .style('opacity', .9);
-                    
-                    let content = `<strong>${d.name}</strong><br/>`;
-                    content += `Type: ${d.type}<br/>`;
-                    if (d.spanish) {
-                        content += `Spanish: ${d.spanish}<br/>`;
-                    }
-                    
-                    tooltip.html(content)
-                        .style('left', (event.pageX + 10) + 'px')
+                    tooltip.html(`
+                        <strong>${d.name}</strong><br/>
+                        Tipo: ${d.type}<br/>
+                        ${d.spanish ? 'Español: ' + d.spanish : ''}
+                    `)
+                        .style('left', (event.pageX + 5) + 'px')
                         .style('top', (event.pageY - 28) + 'px');
                 })
-                .on('mouseout', function() {
+                .on('mouseout', function(d) {
                     tooltip.transition()
                         .duration(500)
                         .style('opacity', 0);
-                })
-                .call(d3.drag()
-                    .on('start', dragStarted)
-                    .on('drag', dragged)
-                    .on('end', dragEnded));
-            
-            // Add circles to nodes
-            node.append('circle')
-                .attr('r', 15)
-                .attr('fill', d => typeColors[d.type] || '#999');
-            
-            // Add labels to nodes
-            node.append('text')
-                .attr('class', 'node-label')
-                .attr('dx', 20)
-                .attr('dy', 4)
-                .text(d => d.name);
-            
-            // Set up simulation ticks
-            simulation.on('tick', () => {
-                // Update link paths
-                path.attr('d', d => {
-                    const dx = d.target.x - d.source.x;
-                    const dy = d.target.y - d.source.y;
-                    const dr = Math.sqrt(dx * dx + dy * dy);
-                    
-                    // Calculate position for the middle of the link for label placement
-                    d.labelX = d.source.x + dx / 2;
-                    d.labelY = d.source.y + dy / 2;
-                    
-                    return 'M' + d.source.x + ',' + d.source.y + 'A' + dr + ',' + dr + ' 0 0,1 ' + d.target.x + ',' + d.target.y;
-                })
-                .attr('id', (d, i) => 'linkPath' + i);
+                });
                 
-                // Update link labels
-                linkLabels.attr('x', d => d.labelX)
-                    .attr('y', d => d.labelY);
+                // Crear leyenda
+                createLegend();
                 
-                // Update node positions
-                node.attr('transform', d => 'translate(' + d.x + ',' + d.y + ')');
+            }).catch(error => {
+                console.error('Error loading graph:', error);
+                document.querySelector('.loading').remove();
+                alert('Error al cargar el grafo');
             });
-            
-            // Drag functions
-            function dragStarted(event, d) {
-                if (!event.active) simulation.alphaTarget(0.3).restart();
-                d.fx = d.x;
-                d.fy = d.y;
-            }
-            
-            function dragged(event, d) {
-                d.fx = event.x;
-                d.fy = event.y;
-            }
-            
-            function dragEnded(event, d) {
-                if (!event.active) simulation.alphaTarget(0);
-                d.fx = null;
-                d.fy = null;
-            }
         }
+        
+        // Función para crear leyenda
+        function createLegend() {
+            const legend = svg.append('g')
+                .attr('class', 'legend')
+                .attr('transform', `translate(${width - 150}, 20)`);
+            
+            const legendData = [
+                {type: 'Person', color: '#ff6b6b'},
+                {type: 'Organization', color: '#4ecdc4'},
+                {type: 'Location', color: '#45b7d1'},
+                {type: 'Date', color: '#96ceb4'}
+            ];
+            
+            legend.selectAll('.legend-item')
+                .data(legendData)
+                .enter().append('g')
+                .attr('class', 'legend-item')
+                .attr('transform', (d, i) => `translate(0, ${i * 20})`)
+                .each(function(d) {
+                    d3.select(this).append('circle')
+                        .attr('r', 6)
+                        .style('fill', d.color);
+                    
+                    d3.select(this).append('text')
+                        .attr('x', 15)
+                        .attr('y', 4)
+                        .text(d.type);
+                });
+        }
+        
+        // Funciones de simulación
+        function ticked() {
+            links
+                .attr('x1', d => d.source.x)
+                .attr('y1', d => d.source.y)
+                .attr('x2', d => d.target.x)
+                .attr('y2', d => d.target.y);
+            
+            nodes
+                .attr('transform', d => `translate(${d.x},${d.y})`);
+        }
+        
+        function dragstarted(event, d) {
+            if (!event.active) simulation.alphaTarget(0.3).restart();
+            d.fx = d.x;
+            d.fy = d.y;
+        }
+        
+        function dragged(event, d) {
+            d.fx = event.x;
+            d.fy = event.y;
+        }
+        
+        function dragended(event, d) {
+            if (!event.active) simulation.alphaTarget(0);
+            d.fx = null;
+            d.fy = null;
+        }
+        
+        // Controles de zoom
+        document.getElementById('zoom-in').addEventListener('click', function() {
+            const currentScale = svg.attr('transform') ? 
+                parseFloat(svg.attr('transform').match(/scale\(([^)]+)\)/)[1]) : 1;
+            svg.attr('transform', `scale(${currentScale * 1.2})`);
+        });
+        
+        document.getElementById('zoom-out').addEventListener('click', function() {
+            const currentScale = svg.attr('transform') ? 
+                parseFloat(svg.attr('transform').match(/scale\(([^)]+)\)/)[1]) : 1;
+            svg.attr('transform', `scale(${currentScale / 1.2})`);
+        });
+        
+        document.getElementById('reset').addEventListener('click', function() {
+            svg.attr('transform', 'scale(1)');
+            simulation.alpha(1).restart();
+        });
+        
+        // Inicializar cuando se carga la página
+        window.addEventListener('load', initGraph);
     </script>
 </body>
 </html>
@@ -510,98 +423,34 @@ def index():
 @app.route('/api/graph')
 def get_graph():
     try:
-        # Obtener parámetros de filtro de la consulta
+        # Obtener parámetros de filtro
         entity_types = request.args.getlist('entity_type')
         relation_types = request.args.getlist('relation_type')
-        show_inferred = request.args.get('show_inferred', 'true').lower() == 'true'
         
+        # Conectar a la base de datos
         graph_db = EntityGraph()
         
-        # Construir la consulta de nodos con filtros dinámicos
-        entity_filter_clause = ""
+        # Obtener datos del grafo con filtros
+        graph_data = graph_db.get_entity_graph(limit=100)
+        
+        # Aplicar filtros si se especifican
         if entity_types:
-            entity_types_quoted = [f"'{t}'" for t in entity_types]
-            entity_filter_clause = f"WHERE e.type IN [{', '.join(entity_types_quoted)}]"
+            graph_data['nodes'] = [node for node in graph_data['nodes'] 
+                                 if node['type'] in entity_types]
         
-        nodes_query = f"""
-            MATCH (e:Entity)
-            {entity_filter_clause}
-            RETURN e.uuid AS id, e.name AS name, e.type AS type, e.spanish AS spanish
-            LIMIT 500
-        """
+        if relation_types:
+            graph_data['links'] = [link for link in graph_data['links'] 
+                                 if link.get('source', 'explicit') in relation_types]
         
-        with graph_db.driver.session() as session:
-            # Obtener nodos filtrados
-            result_nodes = session.run(nodes_query)
-            
-            nodes = [
-                {
-                    "id": record["id"],
-                    "name": record["name"],
-                    "type": record["type"],
-                    "spanish": record["spanish"]
-                }
-                for record in result_nodes
-            ]
-            
-            # IDs de los nodos filtrados para usarlos en consultas de relaciones
-            node_ids = [node["id"] for node in nodes]
-            
-            # Si no hay nodos, devolver grafo vacío
-            if not node_ids:
-                return jsonify({"nodes": [], "relationships": []})
-            
-            # Construir consultas de relaciones
-            relationships = []
-            
-            # Relaciones explícitas
-            if not relation_types or 'explicit' in relation_types:
-                explicit_query = f"""
-                    MATCH (s:Entity)-[r:RELATES_TO]->(o:Entity)
-                    WHERE s.uuid IN $node_ids AND o.uuid IN $node_ids
-                    RETURN s.uuid AS source, o.uuid AS target, r.action AS action, 'explicit' AS rel_type
-                    LIMIT 1000
-                """
-                explicit_rels = session.run(explicit_query, node_ids=node_ids)
-                
-                relationships.extend([
-                    {
-                        "source": record["source"],
-                        "target": record["target"],
-                        "action": record["action"],
-                        "type": record["rel_type"]
-                    }
-                    for record in explicit_rels
-                ])
-            
-            # Relaciones inferidas
-            if show_inferred and (not relation_types or 'inferred' in relation_types):
-                inferred_query = f"""
-                    MATCH (s:Entity)-[r:INFERRED]->(o:Entity)
-                    WHERE s.uuid IN $node_ids AND o.uuid IN $node_ids
-                    RETURN s.uuid AS source, o.uuid AS target, r.action AS action, 'inferred' AS rel_type
-                    LIMIT 1000
-                """
-                inferred_rels = session.run(inferred_query, node_ids=node_ids)
-                
-                relationships.extend([
-                    {
-                        "source": record["source"],
-                        "target": record["target"],
-                        "action": record["action"],
-                        "type": record["rel_type"]
-                    }
-                    for record in inferred_rels
-                ])
+        return jsonify(graph_data)
         
-        graph_db.close()
-        
-        return jsonify({
-            "nodes": nodes,
-            "relationships": relationships
-        })
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    # Usar configuración de Flask desde config.py
+    app.run(
+        host=AppConfig.FLASK_HOST,
+        port=AppConfig.FLASK_PORT,
+        debug=AppConfig.FLASK_DEBUG
+    )

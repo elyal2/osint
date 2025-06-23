@@ -4,6 +4,7 @@ import logging
 import os
 from dotenv import load_dotenv
 import uuid
+from config import AppConfig
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -16,11 +17,14 @@ class EntityGraph:
     """Handles storing and retrieving entity and relationship data in Neo4j."""
     
     def __init__(self):
-        """Initialize connection to Neo4j database using environment variables."""
-        # Get Neo4j connection details from environment variables
-        neo4j_uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-        neo4j_user = os.getenv("NEO4J_USER", "neo4j")
-        neo4j_password = os.getenv("NEO4J_PASSWORD")
+        """Initialize connection to Neo4j database using configuration."""
+        # Get Neo4j connection details from configuration
+        neo4j_uri = AppConfig.NEO4J_URI
+        neo4j_user = AppConfig.NEO4J_USER
+        neo4j_password = AppConfig.NEO4J_PASSWORD
+        
+        if not neo4j_password:
+            raise ValueError("NEO4J_PASSWORD no está configurado en el archivo .env")
         
         try:
             self.driver = GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password))
@@ -99,7 +103,8 @@ class EntityGraph:
             title: $title,
             analysisDate: $analysisDate,
             language: $language,
-            source_url: $source_url
+            source_url: $source_url,
+            provider: $provider
         })
         RETURN d.uuid AS document_uuid
         """
@@ -109,7 +114,8 @@ class EntityGraph:
             title=metadata.get('title', 'Untitled'),
             analysisDate=metadata.get('analysisDate', ''),
             language=metadata.get('language', 'en'),
-            source_url=source_url
+            source_url=source_url,
+            provider=metadata.get('provider', 'unknown')
         )
         record = result.single()
         return record["document_uuid"] if record else None
@@ -198,138 +204,119 @@ class EntityGraph:
         object_type = relationship['object']['type']
         object_name = relationship['object']['name']
         
-        # Check if this is an inferred relationship
-        is_inferred = relationship.get('inferred', False)
+        # Get UUIDs for subject and object
+        subject_uuid = entity_uuids.get((subject_type, subject_name))
+        object_uuid = entity_uuids.get((object_type, object_name))
         
-        # Get entity UUIDs
-        subject_key = (subject_type, subject_name)
-        object_key = (object_type, object_name)
+        if not subject_uuid or not object_uuid:
+            logger.warning(f"Could not find UUIDs for relationship: {subject_name} -> {object_name}")
+            return
         
-        if subject_key not in entity_uuids or object_key not in entity_uuids:
-            logger.warning(f"Missing entity for relationship: {subject_name} ({subject_type}) -> {object_name} ({object_type})")
-            
-            # Create missing entities if necessary
-            if subject_key not in entity_uuids:
-                subject_uuid = self._create_entity({"name": subject_name, "aliases": []}, subject_type)
-                entity_uuids[subject_key] = subject_uuid
-                logger.info(f"Created missing subject entity: {subject_name} ({subject_type})")
-                
-                # Link to document
-                self._link_entity_to_document(subject_uuid, document_uuid)
-            
-            if object_key not in entity_uuids:
-                object_uuid = self._create_entity({"name": object_name, "aliases": []}, object_type)
-                entity_uuids[object_key] = object_uuid
-                logger.info(f"Created missing object entity: {object_name} ({object_type})")
-                
-                # Link to document
-                self._link_entity_to_document(object_uuid, document_uuid)
-        
-        subject_uuid = entity_uuids[subject_key]
-        object_uuid = entity_uuids[object_key]
-        
-        # Use a different relationship type for inferred relationships
-        relationship_type = "INFERRED" if is_inferred else "RELATES_TO"
+        # Determine relationship type based on source
+        rel_type = "RELATES_TO"
+        if relationship.get('source') == 'inferred':
+            rel_type = "INFERRED"
         
         query = f"""
         MATCH (s:Entity {{uuid: $subject_uuid}})
         MATCH (o:Entity {{uuid: $object_uuid}})
-        MERGE (s)-[r:{relationship_type} {{action: $action, document_uuid: $document_uuid}}]->(o)
+        MERGE (s)-[r:{rel_type}]->(o)
+        SET r.action = $action,
+            r.source = $source
         RETURN r
         """
-        result = tx.run(
+        
+        return tx.run(
             query,
             subject_uuid=subject_uuid,
             object_uuid=object_uuid,
-            document_uuid=document_uuid,
-            action=relationship['action']
+            action=relationship['action'],
+            source=relationship.get('source', 'explicit')
         )
-        return result
     
     def get_entity_graph(self, limit: int = 100):
         """
-        Retrieve entity graph data suitable for visualization.
+        Get entity graph data for visualization.
         
+        Args:
+            limit (int): Maximum number of nodes to return
+            
         Returns:
-            Dict: Contains nodes and relationships for visualization
+            Dict: Graph data with nodes and links
         """
         with self.driver.session() as session:
-            # Get entities (nodes)
-            result_nodes = session.run("""
-                MATCH (e:Entity)
-                RETURN e.uuid AS id, e.name AS name, e.type AS type, e.spanish AS spanish
-                LIMIT $limit
-            """, limit=limit)
+            # Get nodes
+            nodes_query = f"""
+            MATCH (e:Entity)
+            RETURN e.uuid AS id, e.name AS name, e.type AS type, e.spanish AS spanish
+            LIMIT {limit}
+            """
             
+            nodes_result = session.run(nodes_query)
             nodes = [
                 {
                     "id": record["id"],
                     "name": record["name"],
                     "type": record["type"],
-                    "spanish": record["spanish"]
+                    "spanish": record["spanish"] or ""
                 }
-                for record in result_nodes
+                for record in nodes_result
             ]
             
-            # Get relationships (edges)
-            result_rels = session.run("""
-                MATCH (s:Entity)-[r:RELATES_TO]->(o:Entity)
-                RETURN s.uuid AS source, o.uuid AS target, r.action AS action
-                LIMIT $limit
-            """, limit=limit)
+            if not nodes:
+                return {"nodes": [], "links": []}
             
-            relationships = [
+            # Get node IDs for relationship query
+            node_ids = [node["id"] for node in nodes]
+            
+            # Get relationships
+            links_query = """
+            MATCH (s:Entity)-[r]->(o:Entity)
+            WHERE s.uuid IN $node_ids AND o.uuid IN $node_ids
+            RETURN s.uuid AS source, o.uuid AS target, r.action AS action, 
+                   type(r) AS rel_type, r.source AS source_type
+            LIMIT 1000
+            """
+            
+            links_result = session.run(links_query, node_ids=node_ids)
+            links = [
                 {
                     "source": record["source"],
                     "target": record["target"],
-                    "action": record["action"]
+                    "action": record["action"],
+                    "source": record["source_type"] or "explicit"
                 }
-                for record in result_rels
+                for record in links_result
             ]
             
             return {
                 "nodes": nodes,
-                "relationships": relationships
+                "links": links
             }
-
+    
     def reset_database(self, confirm=False):
         """
-        Reset the entire database, removing all nodes and relationships.
+        Reset the database by deleting all nodes and relationships.
         
         Args:
-            confirm (bool): Safety parameter that must be set to True to perform reset
+            confirm (bool): If True, skip confirmation prompt
             
         Returns:
-            bool: True if reset was successful, False otherwise
+            bool: True if reset was successful
         """
         if not confirm:
-            logger.warning("Database reset was requested but not confirmed. Set confirm=True to proceed.")
+            logger.warning("reset_database called without confirmation")
             return False
         
         try:
             with self.driver.session() as session:
                 # Delete all relationships first
                 session.run("MATCH ()-[r]-() DELETE r")
-                logger.info("All relationships deleted")
+                logger.info("Deleted all relationships")
                 
-                # Then delete all nodes
+                # Delete all nodes
                 session.run("MATCH (n) DELETE n")
-                logger.info("All nodes deleted")
-                
-                # Verify the database is empty
-                count_result = session.run("MATCH (n) RETURN count(n) AS node_count").single()
-                relationship_count = session.run("MATCH ()-[r]-() RETURN count(r) AS rel_count").single()
-                
-                if count_result and relationship_count:
-                    node_count = count_result["node_count"]
-                    rel_count = relationship_count["rel_count"]
-                    
-                    if node_count == 0 and rel_count == 0:
-                        logger.info("Database reset successful. Database is now empty.")
-                        return True
-                    else:
-                        logger.warning(f"Database may not be completely empty. Found {node_count} nodes and {rel_count} relationships.")
-                        return False
+                logger.info("Deleted all nodes")
                 
                 return True
                 

@@ -6,6 +6,7 @@ from pathlib import Path
 from entity_extractor_improved import EnhancedEntityRelationshipExtractor as EntityRelationshipExtractor
 from web_scraper import fetch_web_content
 from graph_database import EntityGraph
+from config import AppConfig, LLMConfig
 import logging
 
 # Configure logging
@@ -41,6 +42,16 @@ def load_text_file(file_path: str) -> str:
         raise FileNotFoundError(f"File not found: {file_path}")
     except Exception as e:
         raise IOError(f"Error reading file: {str(e)}")
+
+def load_pdf_file(file_path: str) -> bytes:
+    """Loads a PDF file in binary mode."""
+    try:
+        with open(file_path, 'rb') as file:
+            return file.read()
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Archivo no encontrado: {file_path}")
+    except Exception as e:
+        raise IOError(f"Error al leer el archivo PDF: {str(e)}")
 
 def save_output(result: dict, source_name: str, output_dir: str = "output") -> str:
     """
@@ -100,6 +111,10 @@ def main():
         "--url",
         help="URL of the web page to analyze"
     )
+    input_source.add_argument(
+        "--pdf",
+        help="Path to the PDF file to analyze"
+    )
     
     # Otras opciones
     parser.add_argument(
@@ -127,6 +142,12 @@ def main():
         action="store_true",
         help="Resetear la base de datos antes de procesar (elimina todos los datos existentes)"
     )
+    parser.add_argument(
+        "--provider",
+        choices=LLMConfig.get_available_providers(),
+        default=AppConfig.DEFAULT_LLM_PROVIDER,
+        help=f"LLM provider to use (default: {AppConfig.DEFAULT_LLM_PROVIDER})"
+    )
     
     # Parse arguments
     args = parser.parse_args()
@@ -135,8 +156,13 @@ def main():
     if not args.reset_db_only:
         # Si no es reset-only, entonces se requiere analizar algo
         args.analyze = True
-        if not (args.file or args.url):
-            parser.error("Para analizar, debe especificar --file o --url")
+        if not (args.file or args.url or args.pdf):
+            parser.error("Para analizar, debe especificar --file, --url o --pdf")
+    
+    # Validar configuración
+    if not AppConfig.validate_config():
+        logger.error("Error en la configuración. Revisa el archivo .env")
+        sys.exit(1)
     
     # Inicializar conexión a la base de datos si se requiere
     graph_db = None
@@ -172,51 +198,70 @@ def main():
             logger.info("Operación de reseteo de base de datos completada")
             return
         
-        # Procesar archivo o URL
-        text = ""
+        # Crear instancia del extractor con el proveedor especificado
+        logger.info(f"Usando proveedor de LLM: {args.provider}")
+        extractor = EntityRelationshipExtractor(provider_name=args.provider)
+        
+        # Procesar archivo, URL o PDF
         source_name = ""
         doc_title = ""
         source_url = None
+        result = None
         
-        # Procesar según el tipo de entrada
         if args.file:
-            # Cargar desde archivo
+            # Cargar desde archivo de texto
             logger.info(f"Cargando archivo: {args.file}")
             text = load_text_file(args.file)
             source_name = args.file
             doc_title = Path(args.file).stem.replace('_', ' ').title()
-        else:
+            logger.info("Analizando texto...")
+            result = extractor.analyze_text(
+                text=text,
+                doc_title=doc_title,
+                language=args.language
+            )
+        elif args.url:
             # Cargar desde URL
             logger.info(f"Obteniendo página web: {args.url}")
             text, page_title = fetch_web_content(args.url)
             source_name = args.url
             source_url = args.url
             doc_title = page_title
+            logger.info("Analizando texto...")
+            result = extractor.analyze_text(
+                text=text,
+                doc_title=doc_title,
+                language=args.language
+            )
+        elif args.pdf:
+            # Cargar desde archivo PDF
+            logger.info(f"Cargando archivo PDF: {args.pdf}")
+            pdf_content = load_pdf_file(args.pdf)
+            source_name = args.pdf
+            doc_title = Path(args.pdf).stem.replace('_', ' ').title()
+            logger.info("Analizando documento PDF...")
+            result = extractor.analyze_pdf(
+                pdf_content=pdf_content,
+                doc_title=doc_title,
+                language=args.language
+            )
         
-        # Crear instancia del extractor
-        extractor = EntityRelationshipExtractor()
-        
-        # Analizar el texto
-        logger.info("Analizando texto...")
-        result = extractor.analyze_text(
-            text=text,
-            doc_title=doc_title,
-            language=args.language
-        )
-        
-        # Guardar el resultado en archivo si no se omite
-        if not args.skip_file:
-            output_file = save_output(result, source_name, args.output_dir)
-            logger.info(f"Resultados guardados en archivo: {output_file}")
-        
-        # Almacenar en Neo4j si se solicita
-        if graph_db and args.store_db:
-            logger.info("Almacenando resultados en base de datos Neo4j...")
-            document_id = graph_db.store_analysis_results(result, source_url)
-            logger.info(f"Resultados almacenados en base de datos con ID de documento: {document_id}")
-        
-        logger.info("¡Análisis completado!")
-        
+        if result:
+            # Guardar el resultado en archivo si no se omite
+            if not args.skip_file:
+                output_file = save_output(result, source_name, args.output_dir)
+                logger.info(f"Resultados guardados en archivo: {output_file}")
+            
+            # Almacenar en Neo4j si se solicita
+            if graph_db and args.store_db:
+                logger.info("Almacenando resultados en base de datos Neo4j...")
+                document_id = graph_db.store_analysis_results(result, source_url)
+                logger.info(f"Resultados almacenados en base de datos con ID de documento: {document_id}")
+            
+            logger.info("¡Análisis completado!")
+        else:
+            logger.error("No se pudo generar ningún resultado del análisis.")
+            
     except FileNotFoundError as e:
         logger.error(f"Error: {str(e)}")
         sys.exit(1)
