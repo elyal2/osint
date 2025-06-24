@@ -7,17 +7,41 @@ Esta herramienta extrae entidades nombradas (personas, organizaciones, lugares, 
 - **Extracción de entidades** en siete categorías: Persona, Organización, Lugar, Fecha, Evento, Objeto, Código
 - **Identificación de relaciones** entre entidades en formato Sujeto-Acción-Objeto
 - **Análisis de múltiples formatos**: Texto plano, páginas web y archivos PDF
+- **Análisis avanzado de PDFs**: Procesamiento página por página con OCR y contexto solapado
 - **Soporte para múltiples proveedores de LLM**: Anthropic Claude, Azure OpenAI, AWS Bedrock
 - **Procesamiento multilingüe** con traducciones al español
 - **Almacenamiento en base de datos Neo4j** para análisis de grafos
 - **Visualización interactiva** de las relaciones entre entidades
 - **Enriquecimiento progresivo** de la base de conocimiento a medida que se analizan más documentos
+- **Deduplicación inteligente** de entidades y relaciones
+- **Sistema robusto de UUIDs** para garantizar la integridad de las relaciones en la base de datos
+
+## Análisis de PDFs Mejorado
+
+### Procesamiento Página por Página
+El sistema ahora analiza PDFs de manera más efectiva mediante:
+
+- **OCR automático**: Extrae texto de PDFs escaneados o con imágenes
+- **Análisis individual por página**: Cada página se procesa por separado para mayor precisión
+- **Contexto solapado**: Incluye fragmentos de páginas adyacentes para mantener continuidad
+- **Fusión inteligente**: Combina entidades y relaciones de todas las páginas eliminando duplicados
+- **Análisis de relaciones entre páginas**: Identifica conexiones entre entidades de diferentes páginas
+
+### Ventajas del Nuevo Sistema
+- **Mayor precisión**: Mejor extracción de entidades en documentos complejos
+- **Manejo de OCR**: Corrección automática de errores de reconocimiento óptico
+- **Contexto preservado**: Mantiene la continuidad narrativa entre páginas
+- **Escalabilidad**: Funciona eficientemente con documentos de cualquier tamaño
 
 ## Requisitos previos
 
 - Python 3.8 o superior
 - Docker y Docker Compose (para Neo4j)
 - API Key de al menos uno de los proveedores de LLM soportados
+- **Dependencias adicionales para OCR**:
+  - `pytesseract` (para reconocimiento óptico de caracteres)
+  - `Pillow` (para procesamiento de imágenes)
+  - `PyMuPDF` (para manipulación de PDFs)
 
 ## Configuración
 
@@ -40,6 +64,21 @@ source venv/bin/activate  # En Windows: venv\Scripts\activate
 ```bash
 pip install -r requirements.txt
 ```
+
+**Nota**: Para el análisis de PDFs con OCR, asegúrate de tener instalado Tesseract OCR en tu sistema:
+
+**macOS:**
+```bash
+brew install tesseract
+```
+
+**Ubuntu/Debian:**
+```bash
+sudo apt-get install tesseract-ocr
+```
+
+**Windows:**
+Descarga e instala desde [GitHub Tesseract](https://github.com/UB-Mannheim/tesseract/wiki)
 
 ### 4. Configurar variables de entorno
 
@@ -104,11 +143,18 @@ docker-compose up -d
 python main.py --file ruta/al/documento.txt --store-db
 ```
 
-### Analizar un archivo PDF
+### Analizar un archivo PDF (Nuevo sistema mejorado)
 
 ```bash
 python main.py --pdf ruta/al/documento.pdf --store-db
 ```
+
+**Características del análisis de PDFs:**
+- Procesamiento automático página por página
+- OCR automático para PDFs escaneados
+- Contexto solapado entre páginas
+- Deduplicación inteligente de entidades
+- Análisis de relaciones entre páginas
 
 ### Analizar una página web
 
@@ -145,12 +191,14 @@ El modo debug mostrará:
 - Los prompts completos enviados al LLM
 - Las respuestas completas recibidas
 - Información detallada del proceso de análisis
+- Progreso del análisis página por página (para PDFs)
+- Información de deduplicación de entidades
 
 ### Opciones adicionales
 
 ```
 --file FILE            Ruta al archivo de texto a analizar
---pdf PDF              Ruta al archivo PDF a analizar
+--pdf PDF              Ruta al archivo PDF a analizar (nuevo sistema OCR)
 --url URL              URL de la página web a analizar
 --language LANGUAGE    Idioma del texto (por defecto: en)
 --output-dir DIR       Directorio para guardar resultados (por defecto: output)
@@ -184,17 +232,38 @@ Luego, abre tu navegador en http://localhost:5000 para ver la visualización int
 entity-extractor/
 ├── main.py                    # Script principal
 ├── entity_extractor_improved.py # Clase para extraer entidades con múltiples LLMs
-├── llm_providers.py           # Sistema de proveedores de LLM
+├── llm_providers.py           # Sistema de proveedores de LLM (incluye análisis PDF mejorado)
 ├── config.py                  # Configuración centralizada
 ├── web_scraper.py             # Funciones para obtener contenido web
-├── graph_database.py          # Clase para interactuar con Neo4j
+├── graph_database.py          # Clase para interactuar con Neo4j (UUIDs corregidos)
 ├── visualize.py               # Servidor web para visualizar el grafo
 ├── reset_db.py                # Utilidad para resetear la base de datos
 ├── docker-compose.yml         # Configuración de Neo4j en Docker
 ├── requirements.txt           # Dependencias de Python
 ├── env.template               # Plantilla para variables de entorno
+├── samples/                   # Documentos de ejemplo para pruebas
 └── output/                    # Directorio para archivos de salida
 ```
+
+## Mejoras Recientes
+
+### Corrección del Sistema de UUIDs
+- **Problema resuelto**: Inconsistencia en la normalización de tipos de entidades entre almacenamiento y búsqueda
+- **Solución**: Normalización consistente de tipos de entidades en todo el flujo
+- **Resultado**: Las relaciones ahora se crean correctamente en Neo4j
+
+### Análisis de PDFs Avanzado
+- **Procesamiento página por página**: Cada página se analiza individualmente
+- **OCR automático**: Extracción de texto de PDFs escaneados
+- **Contexto solapado**: Fragmentos de páginas adyacentes para continuidad
+- **Deduplicación inteligente**: Eliminación automática de entidades duplicadas
+- **Análisis de relaciones entre páginas**: Conexiones entre entidades de diferentes páginas
+
+### Extracción de Entidades Mejorada
+- **Tipos de entidades normalizados**: Uso consistente de "Person", "Organization", "Location", etc.
+- **Deduplicación en tiempo real**: Evita entidades duplicadas durante la extracción
+- **Aliases mejorados**: Mejor manejo de variantes y traducciones
+- **Relaciones más precisas**: Categorización mejorada de relaciones
 
 ## Proveedores de LLM soportados
 
@@ -202,11 +271,13 @@ entity-extractor/
 - **Modelo**: claude-3-5-haiku-20241022
 - **Configuración**: Solo requiere API key
 - **Ventajas**: Excelente rendimiento, buena relación calidad-precio
+- **Soporte PDF**: Completo con análisis página por página
 
 ### 2. Azure OpenAI
 - **Modelo**: Configurable via `AZURE_DEPLOYMENT_NAME` (por defecto: gpt-4o)
 - **Configuración**: Requiere endpoint, API key, versión de API y nombre de deployment
 - **Ventajas**: Integración con ecosistema Azure, control de costos
+- **Soporte PDF**: Completo con análisis página por página
 - **Variables de configuración**:
   - `AZURE_OPENAI_API_KEY`: Tu clave de API de Azure
   - `AZURE_OPENAI_ENDPOINT`: Endpoint de tu recurso Azure OpenAI
@@ -217,6 +288,7 @@ entity-extractor/
 - **Modelo**: Configurable via `DEFAULT_AWS_MODEL` (por defecto: anthropic.claude-3-haiku-20240307-v1:0)
 - **Configuración**: Usa AWS profiles y regiones
 - **Ventajas**: Integración con AWS, múltiples modelos disponibles
+- **Soporte PDF**: Completo con análisis página por página
 - **Variables de configuración**:
   - `AWS_PROFILE`: Perfil de AWS a usar (por defecto: default)
   - `AWS_REGION`: Región de AWS (por defecto: us-east-1)
@@ -272,6 +344,16 @@ MATCH (e:Entity)
 WHERE e.type IN ["Event", "Object", "Code"]
 RETURN e.type, count(e) as count
 ORDER BY count DESC;
+
+// Ver relaciones por categoría
+MATCH (s)-[r:RELATES_TO]->(o)
+RETURN r.category, count(r) as count
+ORDER BY count DESC;
+
+// Ver documentos analizados con método de análisis
+MATCH (d:Document)
+RETURN d.title, d.provider, d.analysisDate
+ORDER BY d.analysisDate DESC;
 ```
 
 ## Configuración avanzada
@@ -313,6 +395,23 @@ DEFAULT_CONFIGS = {
    AZURE_DEPLOYMENT_NAME=gpt-4o
 ```
 
+## Solución de problemas
+
+### Problemas comunes con PDFs
+- **OCR no funciona**: Asegúrate de tener Tesseract instalado correctamente
+- **PDFs muy grandes**: El sistema procesa página por página, por lo que no hay límite de tamaño
+- **Calidad de extracción**: Usa el modo debug para ver el proceso detallado
+
+### Problemas con la base de datos
+- **Relaciones no se crean**: Verifica que las entidades existan antes de crear relaciones
+- **UUIDs no encontrados**: El sistema ahora normaliza correctamente los tipos de entidades
+- **Errores de conexión**: Verifica que Neo4j esté ejecutándose con Docker Compose
+
+### Optimización del rendimiento
+- **PDFs grandes**: El procesamiento página por página es eficiente incluso para documentos extensos
+- **Múltiples documentos**: Procesa documentos secuencialmente para evitar límites de API
+- **Debug mode**: Usa solo cuando sea necesario para evitar logs excesivos
+
 ## Licencia
 
 [MIT](https://opensource.org/licenses/MIT)
@@ -323,3 +422,5 @@ DEFAULT_CONFIGS = {
 - Análisis de lenguaje natural mediante múltiples proveedores de IA
 - Visualización con [D3.js](https://d3js.org/)
 - Base de datos de grafos [Neo4j](https://neo4j.com/)
+- OCR con [Tesseract](https://github.com/tesseract-ocr/tesseract)
+- Procesamiento de PDFs con [PyMuPDF](https://pymupdf.readthedocs.io/)
