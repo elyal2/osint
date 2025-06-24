@@ -101,7 +101,9 @@ class EntityGraph:
             
             # Enhanced UUID lookup with alias support and debug logs
             def find_entity_uuid(entity_type, name):
-                key = (entity_type, name)
+                # Normalizar el tipo de entidad para que coincida con el almacenamiento
+                entity_type_lower = entity_type.lower()
+                key = (entity_type_lower, name)
                 norm_name = normalize(name)
                 
                 # Debug: mostrar lo que estamos buscando
@@ -115,12 +117,12 @@ class EntityGraph:
                 # Debug: mostrar todas las claves disponibles
                 logger.info(f"[UUID-SEARCH] Claves disponibles para tipo '{entity_type}':")
                 for (et, ename), uuid in entity_uuids.items():
-                    if et == entity_type:
+                    if et == entity_type_lower:
                         logger.info(f"[UUID-SEARCH]   - '{ename}' -> {uuid}")
                 
                 # Buscar por nombre normalizado
                 for (et, ename), uuid in entity_uuids.items():
-                    if et != entity_type:
+                    if et != entity_type_lower:
                         continue
                     norm_ename = normalize(ename)
                     logger.info(f"[UUID-SEARCH] Comparando normalizado: '{norm_name}' vs '{norm_ename}'")
@@ -130,7 +132,7 @@ class EntityGraph:
                 
                 # Buscar en aliases (normalizados)
                 for (et, ename), uuid in entity_uuids.items():
-                    if et != entity_type:
+                    if et != entity_type_lower:
                         continue
                     entity_obj = find_entity_obj(et, ename)
                     if entity_obj and 'aliases' in entity_obj:
